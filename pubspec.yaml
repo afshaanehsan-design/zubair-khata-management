@@ -1,0 +1,40 @@
+﻿name: zubair_khata_management
+description: Offline-first bilingual LPG accounts, stock and business management.
+publish_to: none
+version: 1.0.0+1
+environment:
+  sdk: ^3.13.7
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  drift: ^2.32.0
+  sqlite3: ^3.0.0
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  supabase_flutter: ^2.10.0
+  flutter_secure_storage: ^10.0.0
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  pdf: ^3.12.0
+  printing: ^5.14.0
+  excel: ^4.0.6
+  file_selector: ^1.0.3
+  crypto: ^3.0.6
+  share_plus: ^12.0.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope.ttf
+    - family: NotoUrdu
+      fonts:
+        - asset: assets/fonts/NotoNastaliqUrdu.ttf

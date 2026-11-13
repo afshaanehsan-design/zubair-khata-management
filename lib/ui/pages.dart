@@ -878,12 +878,6 @@ class StockPage extends StatelessWidget {
               icon: const Icon(Icons.tune),
               label: Text(context.t('Stock adjustment')),
             ),
-            OutlinedButton.icon(
-              onPressed: () =>
-                  composeEntry(context, app, type: EntryType.cylinder),
-              icon: const Icon(Icons.propane_tank_outlined),
-              label: Text(context.t('Cylinder movement')),
-            ),
             TextButton(
               onPressed: () => previewReport(
                 context,
@@ -899,97 +893,62 @@ class StockPage extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 22),
-        Panel(
-          child: Column(
-            children: [
-              const SectionHeader('Cylinders'),
-              for (final size in sizes)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.propane_tank_outlined,
-                        color: teal,
-                        size: 32,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          sizeLabel(size),
-                          style: const TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
+        // Gas is tracked by KG and cylinder fills are never entered, so the
+        // shop's full/empty counts are not shown; only cylinders customers
+        // still hold, and only when there are any.
+        if (b.held.values.any((v) => v != 0)) ...[
+          const SizedBox(height: 22),
+          Panel(
+            child: Column(
+              children: [
+                const SectionHeader('Cylinders'),
+                for (final size in sizes)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.propane_tank_outlined,
+                          color: teal,
+                          size: 32,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            sizeLabel(size),
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Text(
-                              context.t('Full'),
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 11,
+                        Expanded(
+                          child: Column(
+                            children: [
+                              Text(
+                                context.t('Customer-held'),
+                                style: const TextStyle(
+                                  color: muted,
+                                  fontSize: 11,
+                                ),
                               ),
-                            ),
-                            Text(
-                              '${b.full['$size'] ?? 0}',
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w600,
+                              Text(
+                                '${b.held.entries.where((e) => e.key.endsWith(':$size')).fold(0, (v, e) => v + e.value)}',
+                                style: const TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Text(
-                              context.t('Empty'),
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 11,
-                              ),
-                            ),
-                            Text(
-                              '${b.empty['$size'] ?? 0}',
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Text(
-                              context.t('Customer-held'),
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 11,
-                              ),
-                            ),
-                            Text(
-                              '${b.held.entries.where((e) => e.key.endsWith(':$size')).fold(0, (v, e) => v + e.value)}',
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
         const SizedBox(height: 22),
         Panel(
           child: Column(

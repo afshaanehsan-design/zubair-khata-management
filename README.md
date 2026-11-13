@@ -386,3 +386,43 @@ These checks use local databases and native build tools. They do not establish a
 - `202611130002_share_purchase.sql` mirrors it on the server (whitelist, validation, reservation in `rebuild`, charge and capacity checks) and rebuilds existing owners' caches. No stored document needed rewriting: no share existed in live data, and FIFO shares already posted keep their recorded charge (only shares saved from now on must be in whole rupees).
 - Verification: `flutter analyze --no-pub`: no issues. Full `flutter test --no-pub`: **196 tests passed**, including 11 new chosen-purchase tests (`test/share_purchase_test.dart`, with a widget test that picks the purchase and saves), a validation-parity case, the layout walk now correcting a chosen share in both entry forms at all six sizes in English and Urdu, and earlier sharing tests updated to whole-rupee charges. `dart run tool/backend_test.dart`: passed (102 checks) in an isolated copy, including 9 new checks (a share before its chosen purchase charged Rs 7,028,814, exact-paisa / too-many-KG / unknown-purchase refusals, posting parity, a purchase correction that keeps the link and one that is refused, the deletion block, and a return); re-run in the workspace after merging.
 - Not run: native Windows/Android builds, a restart of the running live app, or deployment to a cloud backend.
+
+## Cylinder full/empty counts hidden — 13 November 2026
+
+- Asked by the user: the Stock page showed Full −19 / −94 / −452 and Empty 19 / 94 / 452 with a "Check cylinder counts" warning, although gas had been bought. The business buys and sells gas by KG and never enters cylinder fills, so every sale lowered "Full" and every returned empty raised "Empty" with nothing to balance them. The counts meant nothing and would always look wrong.
+- The Stock page no longer shows Full/Empty counts or the Cylinder movement button. Its Cylinders panel appears only when some customer still holds our cylinders, and then shows just that. `Book.warnings` no longer raises "Check cylinder counts". The Cylinder custody report lists only customer-held cylinders. Gas stock (KG), purchase lots, cylinders sold per size, bills and the sale form are unchanged. `Book.full`/`empty` are still projected, and existing cylinder movement entries still post and display, so nothing stored changed and it can be brought back. Server and client are unaffected (display only).
+- Verification: `flutter analyze --no-pub`: no issues. Full `flutter test --no-pub`: **196 tests passed**, including the layout walk at all six sizes in English and Urdu. The live database was only read, through copies.
+- Not run: native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app.
+
+## Roznamcha PDF like the old printed sheet — 13 November 2026
+
+- Asked by the user, with a photo of a page printed from the old single-page app ("Roznamcha History — Roznamcha History (Date wise)", 25-10-2026): the Roznamcha PDF must have the same details, format and arrangement.
+- Print / PDF on the Roznamcha page, Day history's Preview PDF and Reports → Daily roznamcha now print that sheet (`lib/features/reports/roznamcha_sheet.dart`), each day on its own page. Top to bottom:
+  - the title and print stamp;
+  - the day, when it was saved (only while the printout is that saved copy) and its Safi Baqaya;
+  - Opening, A: Kul Aamad, B: Kharcha + Bank Jama and Safi Baqaya;
+  - A: Aamad / Wasooli (#, Parchi, Customer / Party, 11.8K, 15K, 45K, Rate, Bill, Cash, Bank / Account, Kul Wasooli, then its Total row);
+  - Bank Nikali / Less, when the day has any;
+  - B: Kharcha + Bank Jama: the day's own entries in order, then one Bank Jama per bank wasooli.
+- It prints black on white in Helvetica (Arial's metrics). Columns are as wide as their content, and a wide day is shrunk to fit (not below 85%), as the old browser print was.
+- Added only on days that need them: a Direct to Party column and rows, opening balance rows, bulk or share KG and the note under the customer, the bank-paid kharcha total, and the day's purchases, stock and cylinder entries. Urdu prints the same sheet mirrored.
+- Urdu in names and notes is shaped by Flutter, with the Latin part in Arial. Names, and numbers with "-", are isolated so mixed Urdu/English text keeps its order.
+- The old generic PDF's Calculated Bill, gas dispatch, gas stock and purchase-share lines are no longer printed; they stay on the page. Excel/CSV and the Reports table are unchanged, and nothing stored changed.
+- Verification: `flutter analyze --no-pub`: no issues. Full `flutter test --no-pub`: **202 tests passed**, including six new ones in `test/roznamcha_sheet_test.dart`:
+  - the photographed day rebuilt cell by cell;
+  - every extra kind of entry;
+  - the saved-copy rule;
+  - ranges and empty days;
+  - Urdu labels;
+  - English and Urdu PDFs.
+- The PDFs were rendered to PNG and compared with the photo; `build/preview-roznamcha-reference.pdf` is the photographed day.
+- On a copy of the live khata, 1–3 November printed with each day's Safi Baqaya equal to the ledger's cash in hand. 2 November (34 Aamad and 34 Kharcha rows) fits on two pages, one line per entry. The live database was only read, through that copy.
+- Not run: native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app.
+
+## Compact PDF; original Roznamcha toggle restored — 13 November 2026
+
+- Compact applies only to Roznamcha PDF previews. The page's original Entry wise / Customer wise toggle, subtotal rows and individual entries are fully restored, with no shared PDF setting.
+- The PDF preview's previous debug switch is removed. Its Compact switch combines repeated entries per party and day, retains the customer/party name once, and shows only the combined amount in Bank and Direct cells, without bank/account/destination names underneath. For the reference's three bank receipts, 10,000 + 39,000 + 18,000 becomes **67,000**. Long text ends in an ellipsis; amounts retain their full width. Switching Compact off restores PDF details.
+- Saved history and date ranges support the same PDF option. Stored entries, balances, Safi Baqaya, the page and Excel/CSV rows are unchanged.
+- Verification: the compact, Roznamcha page, sheet, report and translation tests passed (**17 tests**); static analysis reported no issues. The restored page toggle was checked at desktop and phone sizes down to 360×640 in both languages. Compact English and Urdu PDFs were rendered and checked visually, including full large amounts and the absence of bank/account labels in collection amount cells.
+- Not run: the full suite, native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app.

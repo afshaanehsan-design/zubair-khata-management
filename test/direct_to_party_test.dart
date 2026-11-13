@@ -557,6 +557,49 @@ void main() {
     await db.close();
   });
 
+  testWidgets('Urdu names keep their sides of the arrow in B', (tester) async {
+    await initializeDateFormatting('en');
+    tester.view.physicalSize = const Size(1920, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final (app, db) = await open();
+    await app.saveMaster('account', {'name': 'لقمان احمد', 'bank': 'HBL'});
+    final luqman = app.ofKind('account').firstWhere((a) => a.id != 'cash').id;
+    await app.saveMaster('party', {'name': 'عصمت بریار'});
+    await app.saveMaster('party', {
+      'name': 'سانگلہ پیٹرولیم',
+      'customer': false,
+      'supplier': true,
+    });
+    await app.post({
+      'type': 'receipt',
+      'date': app.selectedDate,
+      'party': app.partyByName('عصمت بریار')!.id,
+      'bank': rs(10000),
+      'bankAccount': luqman,
+      'direct': rs(5000),
+      'directParty': app.partyByName('سانگلہ پیٹرولیم')!.id,
+      'form': 'aamad',
+    });
+    await tester.pumpWidget(KhataApp(app));
+    await tester.pumpAndSettle();
+    // Without isolates the two Urdu names around "→" run together and swap
+    // sides, so the row would read as money going the other way.
+    final l = String.fromCharCode(0x2066), e = String.fromCharCode(0x2069);
+    expect(
+      find.text('Wasooli — $lعصمت بریار$e → $lلقمان احمد · HBL$e'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Wasooli — $lعصمت بریار$e → $lسانگلہ پیٹرولیم$e'),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+    await db.close();
+  });
+
   testWidgets('The page shows it in A and B, and each khata shows its side', (
     tester,
   ) async {

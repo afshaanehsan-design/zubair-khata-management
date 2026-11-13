@@ -81,67 +81,96 @@ Future<void> clearExportCopies(String organization) async {
 }
 
 Future<void> previewReport(BuildContext context, Report report) async {
-  final exporter = ReportExporter();
-  final future = exporter.pdf(report);
+  var current = report;
+  var exporter = ReportExporter();
+  var future = exporter.pdf(current);
   await showDialog<void>(
     context: context,
-    builder: (ctx) => Dialog.fullscreen(
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(report.title),
-          leading: IconButton(
-            onPressed: () {
-              exporter.cancelled = true;
-              Navigator.pop(ctx);
-            },
-            icon: const Icon(Icons.close),
-          ),
-        ),
-        body: FutureBuilder<Uint8List>(
-          future: future,
-          builder: (ctx, snapshot) {
-            if (snapshot.hasError) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text('${ctx.t('Error')}: ${snapshot.error}'),
-                ),
-              );
-            }
-            if (!snapshot.hasData) {
-              return Center(
-                child: Column(
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => Dialog.fullscreen(
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(
+              report.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            actions: [
+              if (report.roznamchaSheets != null)
+                Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 16),
-                    Text(ctx.t('Preparing report…')),
+                    Text(ctx.t('Compact')),
+                    Switch(
+                      key: const ValueKey('pdf-compact'),
+                      value: current.compact,
+                      onChanged: (value) => setState(() {
+                        exporter.cancelled = true;
+                        current = current.withCompact(value);
+                        exporter = ReportExporter();
+                        future = exporter.pdf(current);
+                      }),
+                    ),
                   ],
                 ),
+            ],
+            leading: IconButton(
+              onPressed: () {
+                exporter.cancelled = true;
+                Navigator.pop(ctx);
+              },
+              icon: const Icon(Icons.close),
+            ),
+          ),
+          body: FutureBuilder<Uint8List>(
+            key: ValueKey(current.compact),
+            future: future,
+            builder: (ctx, snapshot) {
+              if (snapshot.hasError) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text('${ctx.t('Error')}: ${snapshot.error}'),
+                  ),
+                );
+              }
+              if (!snapshot.hasData) {
+                return Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 16),
+                      Text(ctx.t('Preparing report…')),
+                    ],
+                  ),
+                );
+              }
+              return PdfPreview(
+                build: (_) async => snapshot.data!,
+                canDebug: false,
+                canChangeOrientation: false,
+                canChangePageFormat: false,
+                pdfFileName: 'ZubairKhata.pdf',
+                actions: [
+                  PdfPreviewAction(
+                    icon: const Icon(Icons.save_alt),
+                    onPressed: (context, build, pageFormat) async {
+                      await saveBytes(
+                        context,
+                        snapshot.data!,
+                        'ZubairKhata',
+                        'pdf',
+                      );
+                    },
+                  ),
+                ],
               );
-            }
-            return PdfPreview(
-              build: (_) async => snapshot.data!,
-              canChangeOrientation: false,
-              canChangePageFormat: false,
-              pdfFileName: 'ZubairKhata.pdf',
-              actions: [
-                PdfPreviewAction(
-                  icon: const Icon(Icons.save_alt),
-                  onPressed: (context, build, pageFormat) async {
-                    await saveBytes(
-                      context,
-                      snapshot.data!,
-                      'ZubairKhata',
-                      'pdf',
-                    );
-                  },
-                ),
-              ],
-            );
-          },
+            },
+          ),
         ),
       ),
     ),
   );
+  exporter.cancelled = true;
 }

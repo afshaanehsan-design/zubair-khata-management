@@ -774,8 +774,9 @@ class Book {
           ((shareCosts[d.id] ?? 0) - d.shareCharge).abs() >= 100,
     ))
       'Purchase share cost changed; review purchase shares',
-    if (full.values.any((v) => v < 0) || empty.values.any((v) => v < 0))
-      'Check cylinder counts',
+    // No warning for negative full/empty counts: the business buys and
+    // sells gas by KG and never records fills, so those counts always go
+    // negative and mean nothing (hidden from the UI on 13 November 2026).
   ];
 }
 

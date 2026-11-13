@@ -23,9 +23,13 @@ import '../ledger/entry_facts.dart'
         entryTitle,
         entryTypeLabel;
 import '../ledger/roznamcha.dart';
+import 'roznamcha_sheet.dart';
 
 String money(int minor) => NumberFormat('#,##0.##', 'en').format(minor / 100);
 String kg(int grams) => NumberFormat('#,##0.###', 'en').format(grams / 1000);
+
+/// Whether [text] has Urdu (Arabic-script) letters.
+bool hasUrduScript(String text) => UrduPdfRenderer._script.hasMatch(text);
 
 class Cell {
   final String text;
@@ -56,6 +60,15 @@ class Report {
 
   /// Relative column widths inside one grid; equal when empty.
   final List<double> flex;
+
+  /// Days of the Roznamcha printed like the original page's history sheet
+  /// (`roznamcha_sheet.dart`). When there are any, the PDF is these sheets;
+  /// the table, Excel and CSV still use [columns] and [rows].
+  final List<RozSheet> sheets;
+  final bool compact;
+
+  /// Rebuild only the printed sheets when switching the PDF preview mode.
+  final List<RozSheet> Function(bool)? roznamchaSheets;
   const Report({
     required this.title,
     required this.business,
@@ -67,7 +80,26 @@ class Report {
     this.sections = const {},
     this.grids = 1,
     this.flex = const [],
+    this.sheets = const [],
+    this.compact = false,
+    this.roznamchaSheets,
   });
+
+  Report withCompact(bool value) => Report(
+    title: title,
+    business: business,
+    subtitle: subtitle,
+    columns: columns,
+    rows: rows,
+    notes: notes,
+    urdu: urdu,
+    sections: sections,
+    grids: grids,
+    flex: flex,
+    sheets: roznamchaSheets?.call(value) ?? sheets,
+    compact: value,
+    roznamchaSheets: roznamchaSheets,
+  );
 }
 
 const reportNames = [
@@ -108,6 +140,8 @@ Report buildReport(
   final rows = <List<Cell>>[];
   final notes = <String>[];
   final sections = <int>{};
+  final sheets = <RozSheet>[];
+  List<RozSheet> Function(bool)? roznamchaSheets;
   void add(List<dynamic> values) =>
       rows.add(values.map((v) => v is Cell ? v : Cell('$v')).toList());
   void section(String date, String label) {
@@ -472,20 +506,13 @@ Report buildReport(
         );
       }
     case 'Cylinder custody':
-      columns = ['Name', 'Size', 'Full', 'Empty', 'Customer-held'];
-      for (final size in sizes) {
-        add([
-          t('Stock'),
-          sizeLabel(size),
-          book.full['$size'] ?? 0,
-          book.empty['$size'] ?? 0,
-          '',
-        ]);
-      }
+      // Only who holds our cylinders: full/empty counts in the shop are not
+      // kept (fills are never entered; gas is tracked by KG).
+      columns = ['Name', 'Size', 'Customer-held'];
       for (final p in app.ofKind('party', archived: true)) {
         for (final size in sizes) {
           if ((book.held['${p.id}:$size'] ?? 0) != 0) {
-            add([p.name, sizeLabel(size), '', '', book.held['${p.id}:$size']]);
+            add([p.name, sizeLabel(size), book.held['${p.id}:$size']]);
           }
         }
       }
@@ -644,7 +671,7 @@ Report buildReport(
                   '${sizeLabel(s)} × ${integer((d.data['quantities'] as Map?)?['$s'])}',
               if (d.extraGrams > 0)
                 '${t(d.bulkAtCost ? 'Purchase share (at cost)' : 'Bulk')} ${kg(d.extraGrams)} KG'
-                '${app.shareSource(d).isEmpty ? '' : ' · ${app.shareSource(d)}'}',
+                    '${app.shareSource(d).isEmpty ? '' : ' · ${app.shareSource(d)}'}',
               if (d.type == EntryType.sale && !d.purchaseShare)
                 '${t('Rate')} ${money(d.rate)} · ${t('Bill')} ${money(d.total)}',
               if (d.type == EntryType.sale && d.purchaseShare)
@@ -812,6 +839,32 @@ Report buildReport(
           ]);
         }
       }
+      // The PDF: each day as the original page's history sheet. One day
+      // asked for (the Roznamcha page's Print / PDF) is printed even empty.
+      final stamp = rozStamp(app.selectedDate, t);
+      final printDays = days.isEmpty && from == to
+          ? [
+              RoznamchaDay(
+                from,
+                cash
+                    .where((p) => p.date.compareTo(from) < 0)
+                    .fold(0, (v, p) => v + p.debit),
+                const [],
+              ),
+            ]
+          : days;
+      roznamchaSheets = (compact) => [
+        for (final day in printDays)
+          rozSheet(
+            app,
+            day,
+            t,
+            stamp: stamp,
+            saved: rozSavedCopy(app, day),
+            compact: compact,
+          ),
+      ];
+      sheets.addAll(roznamchaSheets(false));
     default:
       columns = [
         'Date',
@@ -885,6 +938,8 @@ Report buildReport(
     notes: notes,
     urdu: urdu,
     sections: sections,
+    sheets: sheets,
+    roznamchaSheets: roznamchaSheets,
   );
 }
 
@@ -978,9 +1033,25 @@ String _statementText(
 
 Report snapshotReport(AppController app, Record snapshot, {bool urdu = false}) {
   final t = Words(urdu);
-  final docs = (snapshot.data['documents'] as List).map(
-    (v) => Document(Record.fromJson(Map<String, dynamic>.from(v as Map))),
+  final docs = (snapshot.data['documents'] as List)
+      .map(
+        (v) => Document(Record.fromJson(Map<String, dynamic>.from(v as Map))),
+      )
+      .toList();
+  // The saved entries on the opening the day has now (the closing of the
+  // days before it), as the Roznamcha page works it out.
+  final date = '${snapshot.data['date']}';
+  final book = app.bookAt(date);
+  final day = RoznamchaDay(
+    date,
+    book.money('cash') - book.dayMovement(date, 'money:cash'),
+    docs,
   );
+  final stamp = rozStamp(app.selectedDate, t);
+  final saved = rozSavedTime('${snapshot.data['savedAt'] ?? ''}');
+  List<RozSheet> sheets(bool compact) => [
+    rozSheet(app, day, t, stamp: stamp, saved: saved, compact: compact),
+  ];
   return Report(
     title: t('Daily roznamcha'),
     business: app.businessName,
@@ -1007,6 +1078,8 @@ Report snapshotReport(AppController app, Record snapshot, {bool urdu = false}) {
         ],
     ],
     urdu: urdu,
+    sheets: sheets(false),
+    roznamchaSheets: sheets,
   );
 }
 
@@ -1281,6 +1354,165 @@ class UrduPdfRenderer implements PdfTextRenderer {
     _cache[key] = result;
     return result;
   }
+
+  final Map<String, (pw.MemoryImage, double)> _paragraphs = {};
+  static final _script = RegExp(r'[\u0600-\u08ff\ufb50-\ufdff\ufe70-\ufeff]');
+  static final _scriptRun = RegExp(
+    r'[\u0600-\u08ff\ufb50-\ufdff\ufe70-\ufeff]+'
+    r'(?:[\s\u200c\u200d]+[\u0600-\u08ff\ufb50-\ufdff\ufe70-\ufeff]+)*',
+  );
+  static final _number = RegExp(r'[-+]?\d(?:[\d,./:-]*\d)?');
+  PdfFont? _helvetica, _helveticaBold;
+
+  /// Flutter's paragraph of styled runs for [runs]: Urdu script in Nastaliq,
+  /// a little larger so it reads as large as the Latin beside it, and the
+  /// rest in Arial, which matches the page's Helvetica (Manrope where there
+  /// is no Arial).
+  TextSpan _paragraph(List<(String, bool, double)> runs, Color color) {
+    TextSpan piece(String text, bool urdu, bool bold, double size) => TextSpan(
+      // After Urdu letters, bidi reads digits as Arabic numbers, which do not
+      // join over "-": 26-10-2026 would print as 2026-10-26. Such a number is
+      // isolated left to right, which keeps its place in an Urdu sentence;
+      // other numbers already read right.
+      text: urdu
+          ? text
+          : text.replaceAllMapped(
+              _number,
+              (m) => m[0]!.contains(RegExp('[-+]'))
+                  ? '\u2066${m[0]}\u2069'
+                  : m[0]!,
+            ),
+      style: TextStyle(
+        fontFamily: urdu ? 'NotoUrdu' : 'Arial',
+        fontFamilyFallback: const ['Manrope'],
+        fontSize: urdu ? size * 1.2 : size,
+        height: urdu ? 1.6 : null,
+        fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+        fontVariations: [FontVariation.weight(bold ? 700 : 400)],
+        color: color,
+      ),
+    );
+    final pieces = <TextSpan>[];
+    for (final (part, bold, size) in runs) {
+      var at = 0;
+      for (final m in _scriptRun.allMatches(part)) {
+        if (m.start > at) {
+          pieces.add(piece(part.substring(at, m.start), false, bold, size));
+        }
+        pieces.add(piece(m.group(0)!, true, bold, size));
+        at = m.end;
+      }
+      if (at < part.length) {
+        pieces.add(piece(part.substring(at), false, bold, size));
+      }
+    }
+    return TextSpan(children: pieces);
+  }
+
+  /// How wide [runs] are on one line, drawn as [runs] draws them.
+  double measure(
+    List<(String, bool, double)> runs, {
+    double letterSpacing = 0,
+  }) {
+    if (!_script.hasMatch(runs.map((r) => r.$1).join())) {
+      final document = PdfDocument();
+      final regular = _helvetica ??= PdfFont.helvetica(document);
+      final bold = _helveticaBold ??= PdfFont.helveticaBold(document);
+      var width = 0.0;
+      for (final (part, isBold, size) in runs) {
+        final font = isBold ? bold : regular;
+        for (final rune in part.runes) {
+          // Beyond Latin-1 the fallback font draws it: an em is a safe guess.
+          final em = rune < 256 ? font.glyphMetrics(rune).advanceWidth : 1.0;
+          width += em * size + letterSpacing;
+        }
+      }
+      return width;
+    }
+    final painter = TextPainter(
+      text: _paragraph(runs, Colors.black),
+      textDirection: rtl ? TextDirection.rtl : TextDirection.ltr,
+      locale: const Locale('ur'),
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return width;
+  }
+
+  /// A paragraph of styled runs (text, bold, font size) exactly [width]
+  /// wide, for the Roznamcha sheet. Latin text is set in the page's own font,
+  /// bold through its bold face, and wraps like any PDF text. A paragraph
+  /// with Urdu script is shaped by Flutter and drawn at 300 DPI, as tall as
+  /// its wrapped lines: left to right unless [rtl], so a name typed as
+  /// "لقمان احمد Luqman Ahmad" reads as typed in an English sheet.
+  Future<pw.Widget> runs(
+    List<(String, bool, double)> runs,
+    double width, {
+    pw.TextAlign align = pw.TextAlign.left,
+    PdfColor color = PdfColors.black,
+    double letterSpacing = 0,
+  }) async {
+    final text = runs.map((r) => r.$1).join();
+    if (!_script.hasMatch(text)) {
+      return pw.SizedBox(
+        width: width,
+        child: pw.RichText(
+          textAlign: align,
+          text: pw.TextSpan(
+            children: [
+              for (final (part, bold, size) in runs)
+                pw.TextSpan(
+                  text: part,
+                  style: pw.TextStyle(
+                    fontSize: size,
+                    fontWeight: bold
+                        ? pw.FontWeight.bold
+                        : pw.FontWeight.normal,
+                    color: color,
+                    letterSpacing: letterSpacing,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    // The picture is kept, not the widget (see [line]).
+    final key = [
+      for (final (part, bold, size) in runs) '$part\u0001$bold\u0001$size',
+      '$width|$align|${color.toInt()}|$rtl',
+    ].join('\u0002');
+    var kept = _paragraphs[key];
+    if (kept == null) {
+      final painter = TextPainter(
+        text: _paragraph(runs, Color(color.toInt())),
+        textAlign: switch (align) {
+          pw.TextAlign.right || pw.TextAlign.end => TextAlign.right,
+          pw.TextAlign.center => TextAlign.center,
+          _ => TextAlign.left,
+        },
+        textDirection: rtl ? TextDirection.rtl : TextDirection.ltr,
+        locale: const Locale('ur'),
+      )..layout(minWidth: width, maxWidth: width);
+      final recorder = ui.PictureRecorder(), canvas = Canvas(recorder);
+      const scale = 300 / 72;
+      final height = painter.height;
+      canvas.scale(scale);
+      painter.paint(canvas, Offset.zero);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(
+        (width * scale).ceil(),
+        (height * scale).ceil(),
+      );
+      final png = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      picture.dispose();
+      painter.dispose();
+      kept = (pw.MemoryImage(png!.buffer.asUint8List()), height);
+      _paragraphs[key] = kept;
+    }
+    return pw.Image(kept.$1, width: width, height: kept.$2);
+  }
 }
 
 class ReportCancelled implements Exception {}
@@ -1294,6 +1526,9 @@ class ReportExporter {
   final void Function(double)? progress;
   ReportExporter({this.progress});
   Future<Uint8List> pdf(Report report) async {
+    // The preview's old debug switch is gone; exports use the print layout.
+    pw.Document.debug = false;
+    if (report.sheets.isNotEmpty) return rozSheetPdf(report, this);
     final latinFont = pw.Font.ttf(
       await rootBundle.load('assets/fonts/Manrope.ttf'),
     );

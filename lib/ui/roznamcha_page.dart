@@ -741,6 +741,15 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
 
   String _entries(int n) => '$n ${context.t(n == 1 ? 'entry' : 'entries')}';
 
+  /// A name or note with Urdu, isolated inside a longer text: otherwise two
+  /// Urdu names around the arrow run together and swap sides.
+  String _iso(String s) => hasUrduScript(s)
+      ? '${String.fromCharCode(app.urdu ? 0x2067 : 0x2066)}$s${String.fromCharCode(0x2069)}'
+      : s;
+
+  /// From whom to whom, pointing the way the page reads.
+  String get _arrow => app.urdu ? '←' : '→';
+
   /// HTML "Entry wise (alag alag) / Customer wise (ikatha)" switch.
   Widget _viewToggle() {
     Widget segment(String label, bool on, bool value) => Material(
@@ -1458,9 +1467,9 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
   Widget _jamaRow(BankJamaLine l, int n, bool wide) {
     final d = l.document;
     final detail = l.automatic
-        ? '${context.t('Wasooli')} — ${app.name(d.party)} → ${_accountName(l.account)}'
+        ? '${context.t('Wasooli')} — ${_iso(app.name(d.party))} $_arrow ${_iso(_accountName(l.account))}'
         : (d.note.isEmpty
-              ? '${context.t('Cash jama')} → ${_accountName(l.account)}'
+              ? '${context.t('Cash jama')} $_arrow ${_iso(_accountName(l.account))}'
               : d.note);
     final action = l.automatic
         ? Text(
@@ -1549,7 +1558,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       if (l.bankName.isNotEmpty) l.bankName,
     ].join(' · ');
     final detail =
-        '${context.t('Wasooli')} — ${app.name(d.party)} → $party${d.note.isEmpty ? '' : ' · ${d.note}'}';
+        '${context.t('Wasooli')} — ${_iso(app.name(d.party))} $_arrow ${_iso(party)}${d.note.isEmpty ? '' : ' · ${_iso(d.note)}'}';
     final action = Text(
       context.t('auto (Aamad se)'),
       textAlign: TextAlign.center,

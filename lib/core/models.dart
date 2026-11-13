@@ -17,6 +17,10 @@ int multiplyDivide(int a, int b, int denominator) {
   return (product.isNegative ? -result : result).toInt();
 }
 
+/// [paisa] rounded to whole rupees, halves away from zero like every bill
+/// (`round_div(x,100)*100` on the server).
+int roundRupees(int paisa) => multiplyDivide(paisa, 1, 100) * 100;
+
 /// Parse decimal input without binary floating-point arithmetic.
 int decimal(String input, int places) {
   final text = input
@@ -206,6 +210,20 @@ class Document {
   );
   int get extraGrams => value('extraGrams');
 
+  /// All gas delivered on a sale or returned with a credit note.
+  int get saleGrams => cylinderGrams + extraGrams;
+  bool get bulkAtCost => data['bulkAtCost'] == true;
+  bool get purchaseShare => bulkAtCost && cylinderGrams == 0;
+  int get shareCharge => bulkAtCost ? value('bulkCost') : 0;
+  int get ownSaleGrams => cylinderGrams + (bulkAtCost ? 0 : extraGrams);
+
+  /// The reference of the purchase a share's bulk comes from, or '' for
+  /// oldest stock first (FIFO). A reference survives corrections.
+  String get sharePurchase =>
+      bulkAtCost && data['sharePurchase'] is String
+          ? data['sharePurchase'] as String
+          : '';
+
   /// Cylinders per size (sizes with none are left out), each billed at the
   /// rate. Lines are rounded to whole rupees on their own, so they can differ
   /// from [cylinderRevenue] by [lineRounding].
@@ -231,12 +249,18 @@ class Document {
   int get rate => value('rate');
   int get cylinderRevenue =>
       multiplyDivide(cylinderGrams, rate, 11800 * 100) * 100;
-  int get bill =>
-      multiplyDivide(cylinderGrams + extraGrams, rate, 11800 * 100) * 100;
-  int get bulkRevenue => bill - cylinderRevenue;
-  int get purchaseBill =>
+  int get bulkBill => bulkAtCost
+      ? shareCharge
+      : multiplyDivide(saleGrams, rate, 11800 * 100) * 100 - cylinderRevenue;
+  int get bill => cylinderRevenue + bulkBill;
+  int get bulkRevenue => bulkAtCost ? 0 : bulkBill;
+  int get purchaseBill => purchaseBillFor(value('grams'));
+
+  /// What [grams] of this purchase cost at its own rate, rounded to whole
+  /// rupees like its bill: the charge for a share taken from this purchase.
+  int purchaseBillFor(int grams) =>
       multiplyDivide(
-        value('grams'),
+        grams,
         rate,
         (value('rateUnit') == 0 ? 11800 : value('rateUnit')) * 100,
       ) *
@@ -357,6 +381,9 @@ Json cleanDocumentData(Json data) {
   ];
   final fields = switch (EntryType.values.byName('${data['type']}')) {
     EntryType.sale => [
+      'bulkAtCost',
+      'bulkCost',
+      'sharePurchase',
       'quantities',
       'returned',
       'rate',
@@ -391,8 +418,6 @@ Json cleanDocumentData(Json data) {
       'account',
       'supplierPayment',
       'branch',
-      // Only on older Company ko payment entries: the form no longer asks
-      // for it. Kept, like the server's canonical_document, so they keep it.
       'customerNote',
     ],
     EntryType.expense => ['amount', 'account', 'category'],
@@ -420,6 +445,9 @@ Json cleanDocumentData(Json data) {
     EntryType.deposit || EntryType.depositRefund => ['amount', 'account'],
     EntryType.historicalSale => ['grams', 'amount'],
     EntryType.creditNote => [
+      'bulkAtCost',
+      'bulkCost',
+      'sharePurchase',
       'sourceInvoice',
       'stockReturned',
       'quantities',

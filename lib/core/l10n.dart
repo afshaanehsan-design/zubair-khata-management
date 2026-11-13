@@ -117,9 +117,6 @@ class Words {
     'Rate per 11.8 KG': 'فی ۱۱٫۸ کلو ریٹ',
     'Rate unit': 'ریٹ کی اکائی',
     'Weight (KG)': 'وزن (کلو)',
-    'Extra KG (billing only)': 'اضافی کلو (صرف بل کے لیے)',
-    'Extra KG does not reduce gas stock.':
-        'اضافی کلو گیس کے اسٹاک سے کم نہیں ہوتے۔',
     'Cylinder quantities': 'سلنڈروں کی تعداد',
     'Empty cylinders returned': 'واپس آنے والے خالی سلنڈر',
     'Customer-owned cylinders': 'کسٹمر کے اپنے سلنڈر',
@@ -175,6 +172,7 @@ class Words {
     'Deposits': 'ضمانتی رقوم',
     'Trade payable': 'قابل ادا تجارتی رقم',
     'Refundable deposit': 'قابل واپسی ضمانتی رقم',
+    'Refund deposit': 'ضمانتی رقم واپس کریں',
     'Outstanding': 'باقی',
     'Overdue': 'میعاد گزر چکی',
     'Share reminder': 'یاد دہانی شیئر کریں',
@@ -221,6 +219,8 @@ class Words {
     'Restore backup': 'بیک اپ بحال کریں',
     'Backup saved': 'بیک اپ محفوظ ہو گیا',
     'Restore completed': 'بحالی مکمل ہو گئی',
+    'Export the backup from before the last restore':
+        'آخری بحالی سے پہلے کا بیک اپ محفوظ کریں',
     'Reset all data': 'تمام ڈیٹا ری سیٹ کریں',
     'Reset all data?': 'تمام ڈیٹا ری سیٹ کریں؟',
     'Erase every party, account, entry and closed day, and start again with an empty khata.': 'تمام فریقین، اکاؤنٹس، اندراجات اور بند دن مٹا کر خالی کھاتے سے دوبارہ شروع کریں۔',
@@ -313,6 +313,10 @@ class Words {
     'Opening balance may be negative when you owe money.':
         'اگر آپ نے رقم دینی ہے تو ابتدائی بیلنس منفی درج کریں۔',
     'Choose a party': 'فریق منتخب کریں',
+    'Choose a company': 'کمپنی منتخب کریں',
+    'Show all parties': 'تمام فریق دکھائیں',
+    'Companies only': 'صرف کمپنیاں',
+    'No company found': 'کوئی کمپنی نہیں ملی',
     'Choose an account': 'اکاؤنٹ منتخب کریں',
     'Choose a bank account': 'بینک اکاؤنٹ منتخب کریں',
     'Enter a name': 'نام درج کریں',
@@ -347,7 +351,6 @@ class Words {
         'پرانا خلاصہ تفصیلی فروخت کے ساتھ نہیں ہو سکتا',
     'Void the historical summary before adding detailed sales':
         'تفصیلی فروخت سے پہلے پرانا خلاصہ منسوخ کریں',
-    'Uncosted stock and extra-KG billing are excluded from complete profit.': 'نامعلوم لاگت کے اسٹاک اور اضافی کلو کے بل کی وجہ سے مکمل منافع معلوم نہیں۔',
     'per KG': 'فی کلو',
     'per 11.8 KG': 'فی ۱۱٫۸ کلو',
     'per tonne': 'فی ٹن',
@@ -442,7 +445,6 @@ class Words {
         'کمپنی نے ہمیں رقم دی (نقد یا بینک)۔ کمپنی کے کھاتے میں جمع۔',
     'Customer / Party': 'کسٹمر / فریق',
     'Parchi / Van': 'پرچی / گاڑی',
-    'Bulk KG (sirf bill)': 'بلک کلو (صرف بل)',
     'Rate (11.8 KG)': 'ریٹ (۱۱٫۸ کلو)',
     'Cash Wasooli': 'نقد وصولی',
     'Bank Wasooli': 'بینک وصولی',
@@ -458,6 +460,8 @@ class Words {
     'Tafseel': 'تفصیل',
     'Tafseel (optional)': 'تفصیل (اختیاری)',
     'Tafseel...': 'تفصیل...',
+    'Customer (kis ke liye)': 'کسٹمر (کس کے لیے)',
+    'Customer...': 'کسٹمر...',
     'Branch...': 'برانچ...',
     'Raqam': 'رقم',
     'Less Raqam': 'کمی کی رقم',
@@ -477,6 +481,10 @@ class Words {
     'Cash (haath ki cash)': 'نقد (ہاتھ کی نقدی)',
     'Naya account': 'نیا اکاؤنٹ',
     'Baqaya': 'بقایا',
+    'Pending balances': 'بقایا جات',
+    'Baqaya jaat': 'بقایا جات',
+    'No pending balances': 'کوئی بقایا نہیں',
+    'No.': 'نمبر',
     'Lena': 'لینا',
     'Dena': 'دینا',
     'Advance': 'ایڈوانس',
@@ -536,6 +544,41 @@ class Words {
     'Calculated Bill': 'حساب شدہ بل',
     'Cylinder': 'سلنڈر',
     'Bulk': 'بلک',
+    'Bulk KG': 'بلک کلو',
+    'Share bulk at purchase cost': 'بلک گیس خرید کی لاگت پر بانٹیں',
+    'Not our sale; party pays the FIFO stock cost.':
+        'یہ ہماری فروخت نہیں؛ پارٹی گیس کے اسٹاک کی اصل لاگت ادا کرے گی۔',
+    'Purchase share': 'خرید میں حصہ',
+    'Purchase shares': 'خرید میں حصے',
+    'Purchase share (at cost)': 'خرید میں حصہ (اصل لاگت پر)',
+    'Purchase share amount': 'خرید کے حصے کی رقم',
+    'Purchase share cost recovery': 'خرید کے حصے کی لاگت کی وصولی',
+    'FIFO cost': 'پہلے خریدے گئے اسٹاک کی لاگت',
+    'Cost difference': 'لاگت کا فرق',
+    'At FIFO cost; no sales profit': 'اصل اسٹاک لاگت پر؛ فروخت کا منافع نہیں',
+    'Enter dated stock and purchase cost before sharing gas':
+        'گیس بانٹنے سے پہلے تاریخ کے ساتھ اسٹاک اور خرید کی لاگت درج کریں',
+    'Choose a valid purchase-share quantity and cost':
+        'خرید کے حصے کی درست مقدار اور لاگت درج کریں',
+    'Purchase-share cost changed; refresh the entry':
+        'خرید کے حصے کی لاگت بدل گئی ہے؛ اندراج دوبارہ تازہ کریں',
+    'Purchase share cost changed; review purchase shares':
+        'خرید کے حصے کی لاگت بدل گئی ہے؛ حصوں کی رپورٹ دیکھیں',
+    'Shared gas is waiting for purchase stock':
+        'بانٹی گئی کچھ گیس کے لیے ابھی خرید کا اسٹاک درج نہیں ہوا',
+    'Not our sale; the party pays our purchase price.':
+        'یہ ہماری فروخت نہیں؛ پارٹی ہماری خرید کی قیمت ادا کرے گی۔',
+    'Share from': 'حصہ کس خرید سے',
+    'Oldest stock first (FIFO)': 'پہلے پرانا اسٹاک (FIFO)',
+    'free': 'باقی',
+    'Choose a purchase to share from': 'وہ خرید منتخب کریں جس سے حصہ دیا گیا',
+    'Shared KG exceed the selected purchase':
+        'بانٹے گئے کلو منتخب خرید سے زیادہ ہیں',
+    'Change the shares of this purchase first':
+        'پہلے اس خرید سے دیے گئے حصے بدلیں',
+    'Bulk gas reduces gas stock.': 'بلک گیس گیس کے اسٹاک سے کم ہوتی ہے۔',
+    'Uncosted stock and historical summaries make profit incomplete.':
+        'نامعلوم لاگت کا اسٹاک اور پرانے خلاصے منافع کو نامکمل بناتے ہیں۔',
     'Rate (e.g. 4640)': 'ریٹ (مثلاً ۴۶۴۰)',
     'Lagayein': 'لگائیں',
     'Parchi': 'پرچی',
@@ -551,7 +594,6 @@ class Words {
     'Entry wise (alag alag)': 'اندراج وار (الگ الگ)',
     'entries': 'اندراجات',
     'entry': 'اندراج',
-    'sirf customer khata': 'صرف کسٹمر کھاتہ',
     '— Aamad khali hai —': '— آمد خالی ہے —',
     'Bank se Nikali (cash mein aaya)': 'بینک سے نکلوائی (نقدی میں آئی)',
     'Aaj ki Wasooli (cash + bank)': 'آج کی وصولی (نقد + بینک)',

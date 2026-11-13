@@ -197,6 +197,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     'amount',
     'note',
     'branch',
+    'customerNote',
     'deposit',
   ];
   final c = {for (final k in _keys) k: TextEditingController()};
@@ -240,6 +241,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   RozTab tab = RozTab.aamad;
   KharchaKind kind = KharchaKind.cash;
   bool payBank = false,
+      bulkAtCost = true,
       lessBank = false,
           // Bank Wasooli went to a company (Direct to Party), not to our bank.
           bankDirect =
@@ -248,6 +250,10 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       more = false,
       saving = false;
   String account = '', category = 'General';
+
+  /// The reference of the purchase a share comes from; '' shares the oldest
+  /// stock first (FIFO).
+  String sharePurchase = '';
   String dueDate = '';
   String? pickedDate, error, success;
   Json? allocations;
@@ -310,6 +316,8 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     for (final k in _keys) k: c[k]!.text,
     'kind': kind.name,
     'payBank': payBank,
+    'bulkAtCost': bulkAtCost,
+    'sharePurchase': sharePurchase,
     'lessBank': lessBank,
     'bankDirect': bankDirect,
     'extraBanks': [
@@ -352,6 +360,8 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         KharchaKind.values.where((v) => v.name == s?['kind']).firstOrNull ??
         KharchaKind.cash;
     payBank = s?['payBank'] == true;
+    bulkAtCost = s?['bulkAtCost'] != false;
+    sharePurchase = '${s?['sharePurchase'] ?? ''}';
     lessBank = s?['lessBank'] == true;
     bankDirect = s?['bankDirect'] == true;
     customerOwned = s?['customerOwned'] == true;
@@ -425,6 +435,8 @@ class RoznamchaFormState extends State<RoznamchaForm> {
           ? Map<String, dynamic>.from(data['allocations'] as Map)
           : null;
       customerOwned = data['customerOwned'] == true;
+      bulkAtCost = data['bulkAtCost'] == true;
+      sharePurchase = '${data['sharePurchase'] ?? ''}';
       dueDate = '${data['dueDate'] ?? ''}';
       returnedEdited.clear();
       payBank = false;
@@ -497,6 +509,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
           payBank = d.account != 'cash';
           account = payBank ? d.account : '';
           c['branch']!.text = '${data['branch'] ?? ''}';
+          c['customerNote']!.text = '${data['customerNote'] ?? ''}';
         case RozForm.opening:
           // No tab: opening balances are corrected in their own dialog.
           break;
@@ -701,7 +714,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
             'Kam az kam wasooli ya cylinders darj karein',
           );
         }
-        if ((grams > 0 || bulk > 0) && rate == 0) {
+        if ((grams > 0 || (bulk > 0 && !bulkAtCost)) && rate == 0) {
           throw const FormatException('Rate likhein (11.8 KG ka)');
         }
         if (grams == 0 && bulk == 0 && deposit > 0) {
@@ -746,6 +759,9 @@ class RoznamchaFormState extends State<RoznamchaForm> {
             },
             'rate': rate,
             'extraGrams': bulk,
+            if (bulk > 0 && bulkAtCost) 'bulkAtCost': true,
+            if (bulk > 0 && bulkAtCost && sharePurchase.isNotEmpty)
+              'sharePurchase': sharePurchase,
             'depositCharge': deposit,
             'customerOwned': customerOwned,
             'dueDate': dueDate,
@@ -807,6 +823,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
             // payment; only the form (display) tells them apart.
             'supplierPayment': company || udhar,
             if (company) 'branch': c['branch']!.text.trim(),
+            if (company) 'customerNote': c['customerNote']!.text.trim(),
             'form': company
                 ? RozForm.companyPay.name
                 : udhar
@@ -941,6 +958,55 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     }
   }
 
+  /// Which purchase a share comes from: oldest stock first (FIFO), or one
+  /// purchase, charged at that purchase's own rate.
+  Widget _sharePurchasePicker() {
+    final options = app.sharePurchaseOptions(
+      date,
+      replace: editing,
+      selected: sharePurchase,
+    );
+    final known = options.any((o) => o.$1.data['reference'] == sharePurchase);
+    return KeyedSubtree(
+      key: const ValueKey('roz-share-purchase'),
+      child: Labeled(
+        context.t('Share from'),
+        DropdownButtonFormField<String>(
+          key: ValueKey('roz-share-purchase-$sharePurchase-${options.length}'),
+          initialValue: known ? sharePurchase : '',
+          isExpanded: true,
+          isDense: true,
+          decoration: rozDecoration(null),
+          items: [
+            DropdownMenuItem(
+              value: '',
+              child: Text(
+                context.t('Oldest stock first (FIFO)'),
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13.5),
+              ),
+            ),
+            for (final (p, free) in options)
+              DropdownMenuItem(
+                value: '${p.data['reference']}',
+                child: Text(
+                  '${dmy(p.date)} · ${app.name(p.party)} · '
+                  '${kg(p.value('grams'))} KG '
+                  '(${context.t('free')} ${kg(free)})',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13.5),
+                ),
+              ),
+          ],
+          onChanged: (v) {
+            sharePurchase = v ?? '';
+            _changed();
+          },
+        ),
+      ),
+    );
+  }
+
   void _clearAfterSave() {
     _clearExtraBanks();
     final rate = c['rate']!.text, party = c['party']!.text;
@@ -951,6 +1017,10 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     // Inside a party's khata the next entry is for the same party.
     if (widget.initialParty != null) c['party']!.text = party;
     customerOwned = false;
+    // Each new bulk entry starts as a purchase share again, even after an
+    // old ordinary bulk sale was corrected or one was saved with it off.
+    bulkAtCost = true;
+    sharePurchase = '';
     // The bank stays chosen for the next customer; Direct to Party does not.
     bankDirect = false;
     more = false;
@@ -1046,9 +1116,27 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         final bulk = _try(() => _grams('bulk'));
         final rate = _try(() => _money('rate'));
         final deposit = customerOwned ? 0 : _try(() => _money('deposit'));
-        final bill = rate > 0 && grams + bulk > 0
+        var bill = rate > 0 && grams + bulk > 0
             ? multiplyDivide(grams + bulk, rate, 1180000) * 100
             : 0;
+        int? shareCost;
+        String? costError;
+        if (bulk > 0 && bulkAtCost) {
+          try {
+            shareCost = app.quoteBulkCost({
+              'date': date,
+              if (editing != null) 'occurredAt': editing!.value('occurredAt'),
+              'quantities': {
+                for (final s in sizes) '$s': _try(() => _count('q$s')),
+              },
+              'extraGrams': bulk,
+              if (sharePurchase.isNotEmpty) 'sharePurchase': sharePurchase,
+            }, replace: editing);
+          } catch (e) {
+            costError = errorText(context, e);
+          }
+          bill = multiplyDivide(grams, rate, 1180000) * 100 + (shareCost ?? 0);
+        }
         final total = bill + (grams + bulk > 0 ? deposit : 0);
         final cash = _try(() => _money('cash'));
         var bank = 0;
@@ -1066,13 +1154,20 @@ class RoznamchaFormState extends State<RoznamchaForm> {
             );
           }
         }
-        final balance = _balancePreview(total - cash - bank);
+        final balance = costError == null
+            ? _balancePreview(total - cash - bank)
+            : null;
         return _previewLine([
           if (grams + bulk > 0)
             _previewText(
               '${context.t('Total Gas')}: ${kg(grams + bulk)} kg${bill > 0 ? '  |  ${context.t('Bill')}: ${rs(total)}' : ''}',
             ),
-          if (total > 0) ...[
+          if (shareCost != null)
+            _previewText(
+              '${context.t('Purchase share (at cost)')}: ${rs(shareCost)}',
+            ),
+          if (costError != null) _previewText(costError, color: amber),
+          if (total > 0 && costError == null) ...[
             OutlinedButton(
               style: _smallButton,
               onPressed: () {
@@ -1094,7 +1189,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
               child: Text(context.t('Bank mein dalein')),
             ),
           ],
-          if (grams + bulk > 0 && rate == 0)
+          if ((grams > 0 || (bulk > 0 && !bulkAtCost)) && rate == 0)
             _previewText(context.t('Rate likhein (11.8 KG ka)'), color: amber),
           if (balance != null) _previewText(balance, color: ink),
           for (final company in companies.values)
@@ -1336,10 +1431,33 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                 },
               ),
             ),
-          GridItem(
-            _input('Bulk KG (sirf bill)', 'bulk', hint: '0', decimals: 3),
-          ),
-          GridItem(_input('Rate (11.8 KG)', 'rate', hint: 'Rate')),
+          GridItem(_input('Bulk KG', 'bulk', hint: '0', decimals: 3)),
+          if (_try(() => _grams('bulk')) > 0)
+            GridItem(
+              Material(
+                color: Colors.transparent,
+                child: SwitchListTile(
+                  key: const ValueKey('roz-share-at-cost'),
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(context.t('Share bulk at purchase cost')),
+                  subtitle: Text(
+                    context.t('Not our sale; the party pays our purchase price.'),
+                  ),
+                  value: bulkAtCost,
+                  onChanged: (v) {
+                    bulkAtCost = v;
+                    _changed();
+                  },
+                ),
+              ),
+              span: 2,
+            ),
+          if (bulkAtCost && _try(() => _grams('bulk')) > 0)
+            GridItem(_sharePurchasePicker(), span: 2),
+          if (!(bulkAtCost &&
+              _try(() => _grams('bulk')) > 0 &&
+              sizes.every((s) => _try(() => _count('q$s')) == 0)))
+            GridItem(_input('Rate (11.8 KG)', 'rate', hint: 'Rate')),
           GridItem(_input('Cash Wasooli', 'cash', hint: 'Rs. 0')),
           GridItem(
             Row(
@@ -1463,7 +1581,15 @@ class RoznamchaFormState extends State<RoznamchaForm> {
             ),
             span: 2,
           ),
-          if (kind == KharchaKind.company)
+          if (kind == KharchaKind.company) ...[
+            GridItem(
+              _input(
+                'Customer (kis ke liye)',
+                'customerNote',
+                number: false,
+                hint: 'Customer...',
+              ),
+            ),
             GridItem(
               SuggestInput(
                 'Branch',
@@ -1474,6 +1600,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                 onChanged: (_) => _changed(),
               ),
             ),
+          ],
           GridItem(_input('Raqam', 'amount', hint: 'Rs. 0', submit: true)),
         ];
       case RozTab.nikali:

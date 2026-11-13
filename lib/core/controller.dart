@@ -38,6 +38,15 @@ class AppController extends ChangeNotifier {
   /// Unsaved Roznamcha form values, kept while moving between pages.
   final rozDrafts = <String, Json>{};
 
+  /// Unsaved values of a new entry in the general composer, by kind of
+  /// entry. Like [rozDrafts] they last until the app or organization closes.
+  final composerDrafts = <String, Json>{};
+
+  /// Whether the database keeps the copy made just before the last backup
+  /// restore or cloud reconnect (metadata `pre_restore`), see
+  /// [preRestoreCopy].
+  bool preRestoreSaved = false;
+
   /// Aamad table grouping ("Customer wise") like the original page.
   bool rozCustomerWise = false;
   String device = '';
@@ -68,6 +77,11 @@ class AppController extends ChangeNotifier {
   bool get urdu => language == 'ur';
   bool get cloudConfigured => client != null;
   bool get signedIn => client?.auth.currentUser != null;
+
+  /// Whether this khata belongs to a cloud account. Only then are queued
+  /// changes waiting for anything: on a device that has never signed in,
+  /// every entry stays in the queue for good, so it has no "pending" count.
+  bool get cloudLinked => owner != null || signedIn;
   String get syncMessage =>
       sync?.message ?? (cloudConfigured ? 'Sign in to sync' : 'Local device');
   List<Record> ofKind(String kind, {bool archived = false}) => records
@@ -124,6 +138,9 @@ class AppController extends ChangeNotifier {
 
   Book get book => _book ??= Book(records);
   Book bookAt(String date) {
+    // Through the last day that has entries (usually today) it is [book].
+    final all = book.documents;
+    if (all.isEmpty || all.last.date.compareTo(date) <= 0) return book;
     if (_datedBooks.length > 40) _datedBooks.clear();
     return _datedBooks.putIfAbsent(
       date,
@@ -227,22 +244,37 @@ class AppController extends ChangeNotifier {
     if (_disposed) return;
     commands = await db.commands();
     if (_disposed) return;
+    // Before 12 November 2026 a "Khata Saaf" was kept in this device's
+    // metadata (`batch:<date>`), which never synced; it is now stored on the
+    // snapshot it saves. Both are read, and the latest one wins.
     final batches = await db
         .customSelect("SELECT key,value FROM metadata WHERE key LIKE 'batch:%'")
         .get();
     if (_disposed) return;
-    batchStarts
-      ..clear()
-      ..addEntries(
-        batches.map(
-          (r) => MapEntry(
-            r.read<String>('key').substring(6),
-            integer(r.read<String>('value')),
-          ),
-        ),
+    final saved = await db
+        .customSelect("SELECT 1 FROM metadata WHERE key='pre_restore'")
+        .get();
+    if (_disposed) return;
+    preRestoreSaved = saved.isNotEmpty;
+    batchStarts.clear();
+    void batch(String date, int at) {
+      if (at > (batchStarts[date] ?? 0)) batchStarts[date] = at;
+    }
+
+    for (final r in batches) {
+      batch(
+        r.read<String>('key').substring(6),
+        integer(r.read<String>('value')),
       );
+    }
+    for (final s in records.where((r) => r.kind == 'snapshot')) {
+      if (s.data['batchAt'] != null) {
+        batch('${s.data['date']}', integer(s.data['batchAt']));
+      }
+    }
     _book = null;
     _datedBooks.clear();
+    _quoteKey = null;
     organizations?.mirror(this);
     notifyListeners();
   }
@@ -461,7 +493,13 @@ class AppController extends ChangeNotifier {
         throw StateError('Reopen this day before changing it');
       }
     }
-    final projected = Book(next.values.toList());
+    final projected = Book(
+      next.values.toList(),
+      verifyShares: {
+        for (final c in changes)
+          if (c.kind == 'document') c.id,
+      },
+    );
     if (projected.held.values.any((v) => v < 0)) {
       throw const FormatException(
         'Cylinder returns exceed this party’s outstanding cylinders',
@@ -533,6 +571,159 @@ class AppController extends ChangeNotifier {
   String nextReference(String prefix, {String? date}) =>
       '$prefix-${(date ?? selectedDate).replaceAll('-', '')}-${device.substring(0, 4).toUpperCase()}-${uuid.v4().substring(0, 8).toUpperCase()}';
 
+  String? _quoteKey;
+  int? _quoteCost;
+  Object? _quoteError;
+
+  /// What the shared bulk in [data] is charged, as [Book.shareChargeFor]
+  /// will check it: from a chosen purchase ([Document.sharePurchase]), that
+  /// purchase's rate for the KG if it has them left; otherwise its FIFO cost
+  /// in the whole projection with this entry in place (replacing [replace]),
+  /// so stock entered later (a purchase after its sales) counts too, rounded
+  /// to whole rupees. Throws when that cannot be known. The last quote is
+  /// kept until the next [reload], as the forms ask again on every rebuild.
+  int quoteBulkCost(
+    Json data, {
+    Document? replace,
+    String id = '~share-quote',
+  }) {
+    final candidate = <String, dynamic>{
+      'type': 'sale',
+      'date': selectedDate,
+      ...data,
+      // A new entry is saved now, after what is already on its date.
+      'occurredAt': data['occurredAt'] ?? 9000000000000,
+      'bulkAtCost': true,
+      'bulkCost': 0,
+    };
+    final key = canonicalJson([
+      id,
+      replace?.id,
+      candidate['date'],
+      candidate['occurredAt'],
+      candidate['quantities'],
+      candidate['extraGrams'],
+      candidate['sharePurchase'],
+    ]);
+    if (key != _quoteKey) {
+      _quoteKey = key;
+      _quoteCost = null;
+      _quoteError = null;
+      try {
+        final current = book, last = current.documents.lastOrNull;
+        final entry = Document(Record(id, 'document', candidate));
+        final atEnd =
+            last == null ||
+            switch (last.date.compareTo(entry.date)) {
+              < 0 => true,
+              > 0 => false,
+              _ =>
+                last.value('occurredAt') < entry.value('occurredAt') ||
+                    (last.value('occurredAt') == entry.value('occurredAt') &&
+                        last.id.compareTo(id) < 0),
+            };
+        if (entry.sharePurchase.isNotEmpty) {
+          final purchase = current.purchaseByReference(entry.sharePurchase);
+          if (purchase == null) {
+            throw const FormatException('Choose a purchase to share from');
+          }
+          if (entry.extraGrams >
+              current.purchaseFree(purchase, except: replace?.id)) {
+            throw const FormatException(
+              'Shared KG exceed the selected purchase',
+            );
+          }
+          _quoteCost = purchase.purchaseBillFor(entry.extraGrams);
+        } else {
+          // A new entry after everything, with nothing waiting for stock,
+          // takes the current lots as they are: no replay of the whole khata.
+          _quoteCost = replace == null && atEnd && current.shortageGrams == 0
+              ? roundRupees(
+                  current.quoteAtEnd(entry.cylinderGrams, entry.extraGrams),
+                )
+              : _shareCharges([
+                  for (final r in records)
+                    if (r.id != replace?.id && r.id != id) r,
+                  entry.record,
+                ], {id})[id]!;
+        }
+      } catch (e) {
+        _quoteError = e;
+      }
+    }
+    if (_quoteError != null) throw _quoteError!;
+    return _quoteCost!;
+  }
+
+  /// [Book.shareChargeFor] for each share in [ids] when the books hold
+  /// [state]. A share's charge does not change FIFO or what a purchase has
+  /// left, so one projection prices them all at once.
+  Map<String, int> _shareCharges(List<Record> state, Set<String> ids) {
+    final projected = Book(state);
+    return {
+      for (final r in state)
+        if (ids.contains(r.id)) r.id: projected.shareChargeFor(Document(r)),
+    };
+  }
+
+  /// Sets `bulkCost` on every new purchase share in [changes] (a daily rate
+  /// change, a restored day) to its charge in the state they produce, so
+  /// each passes the exact-charge check in [commit] as the server applies it.
+  void _priceShares(List<Change> changes) {
+    final shares = {
+      for (final c in changes)
+        if (c.kind == 'document' &&
+            c.data['voided'] != true &&
+            c.data['type'] == 'sale' &&
+            c.data['bulkAtCost'] == true)
+          c.id,
+    };
+    if (shares.isEmpty) return;
+    final state = {for (final r in records) r.id: r};
+    for (final c in changes) {
+      state[c.id] = Record(c.id, c.kind, c.data);
+    }
+    final charges = _shareCharges(state.values.toList(), shares);
+    for (final c in changes) {
+      if (shares.contains(c.id)) c.data['bulkCost'] = charges[c.id];
+    }
+  }
+
+  /// The purchase a share's bulk was chosen from, as "Supplier · DD-MM-YYYY",
+  /// or '' when it shares the oldest stock first (FIFO) or is not a share.
+  String shareSource(Document d) {
+    if (d.sharePurchase.isEmpty) return '';
+    final p = book.purchaseByReference(d.sharePurchase);
+    return p == null
+        ? d.sharePurchase
+        : '${name(p.party)} · ${p.date.split('-').reversed.join('-')}';
+  }
+
+  /// Purchases a share dated [date] can come from: from 60 days before to
+  /// 7 days after it, newest first, each with the KG it still has for
+  /// sharing (not counting the share [replace] being corrected). The one
+  /// already [selected] is kept even outside that window.
+  List<(Document, int)> sharePurchaseOptions(
+    String date, {
+    Document? replace,
+    String selected = '',
+  }) {
+    final day = DateTime.parse(date);
+    String shifted(int days) =>
+        day.add(Duration(days: days)).toIso8601String().substring(0, 10);
+    final from = shifted(-60), to = shifted(7);
+    final current = book;
+    return [
+      for (final p in current.documents.reversed)
+        if (p.type == EntryType.purchase &&
+            '${p.data['reference'] ?? ''}'.isNotEmpty &&
+            current.purchaseByReference('${p.data['reference']}')?.id == p.id &&
+            ((p.date.compareTo(from) >= 0 && p.date.compareTo(to) <= 0) ||
+                p.data['reference'] == selected))
+          (p, current.purchaseFree(p, except: replace?.id)),
+    ];
+  }
+
   /// Posts a document. [before] holds master records (such as a party typed
   /// for the first time) committed atomically with it.
   Future<void> post(
@@ -546,6 +737,16 @@ class AppController extends ChangeNotifier {
       throw StateError('Reopen this day before correcting the entry');
     }
     final newId = uuid.v4();
+    data = {
+      ...data,
+      'occurredAt': data['occurredAt'] ?? DateTime.now().millisecondsSinceEpoch,
+    };
+    if (data['type'] == 'sale' && data['bulkAtCost'] == true) {
+      data['bulkCost'] = quoteBulkCost(data, replace: replace, id: newId);
+      if (Document(Record(newId, 'document', data)).purchaseShare) {
+        data['rate'] = 0;
+      }
+    }
     await commit(
       [
         ...before,
@@ -604,16 +805,38 @@ class AppController extends ChangeNotifier {
         '${r.data['date']}'.compareTo(date) >= 0 &&
         r.data['closed'] == true,
   );
-  Future<void> saveSnapshot() async {
+
+  /// Saves the day's entries as a snapshot (Roznamcha Save, Agla Din,
+  /// Khata Saaf). A day that has not changed since its latest snapshot is
+  /// not stored again, so pressing Agla Din or Save repeatedly adds nothing.
+  /// [batchAt] marks a Khata Saaf: that snapshot is always stored, and the
+  /// time syncs with it.
+  Future<void> saveSnapshot({int? batchAt}) async {
+    final documents = book.documents
+        .where((d) => d.date == selectedDate)
+        .map((d) => d.record.toJson())
+        .toList();
+    final latest =
+        (ofKind('snapshot')
+                .where((s) => s.data['date'] == selectedDate)
+                .toList()
+              ..sort(
+                (a, b) =>
+                    '${a.data['savedAt']}'.compareTo('${b.data['savedAt']}'),
+              ))
+            .lastOrNull;
+    if (batchAt == null &&
+        latest != null &&
+        canonicalJson(latest.data['documents']) == canonicalJson(documents)) {
+      return;
+    }
     await commit([
       Change(uuid.v4(), 'snapshot', {
         'date': selectedDate,
         'name': selectedDate,
         'savedAt': DateTime.now().toIso8601String(),
-        'documents': book.documents
-            .where((d) => d.date == selectedDate)
-            .map((d) => d.record.toJson())
-            .toList(),
+        'documents': documents,
+        'batchAt': ?batchAt,
       }, 0),
     ]);
   }
@@ -654,17 +877,15 @@ class AppController extends ChangeNotifier {
         }, 0),
       );
     }
+    // Restored shares are saved again, so they take today's FIFO cost.
+    _priceShares(changes);
     await commit(changes, action: 'restore', reason: reason);
   }
 
-  Future<void> startBatch() async {
-    await saveSnapshot();
-    await db.setMeta(
-      'batch:$selectedDate',
-      DateTime.now().millisecondsSinceEpoch.toString(),
-    );
-    await reload();
-  }
+  /// Khata Saaf: entries of the day made so far are counted in the opening
+  /// from now on ([batchStarts]).
+  Future<void> startBatch() =>
+      saveSnapshot(batchAt: DateTime.now().millisecondsSinceEpoch);
 
   Future<void> closeDay({bool reopen = false, required String reason}) async {
     if (!signedIn) throw StateError('Connect and sign in before closing a day');
@@ -704,7 +925,10 @@ class AppController extends ChangeNotifier {
     for (final d in book.documents.where(
       // Sales already at this rate need no audited correction.
       (d) =>
-          d.date == selectedDate && d.type == EntryType.sale && d.rate != rate,
+          d.date == selectedDate &&
+          d.type == EntryType.sale &&
+          !d.purchaseShare &&
+          d.rate != rate,
     )) {
       final id = uuid.v4();
       changes.add(
@@ -719,6 +943,9 @@ class AppController extends ChangeNotifier {
         Change(id, 'document', {...d.data, 'rate': rate, 'replaces': d.id}, 0),
       );
     }
+    // A mixed entry's shared bulk keeps its place, but as a newly saved share
+    // it must match today's FIFO cost (normally unchanged, or a few paisa).
+    _priceShares(changes);
     await commit(changes, action: 'correct', reason: reason);
   }
 
@@ -811,10 +1038,18 @@ class AppController extends ChangeNotifier {
       await db.customStatement('VACUUM');
     } catch (_) {}
     rozDrafts.clear();
+    composerDrafts.clear();
     selectedDate = businessDate();
     lastError = null;
     await reload();
     await syncNow();
+  }
+
+  /// The backup made just before the last restore or cloud reconnect, which
+  /// can itself be restored to undo that step; null when there is none.
+  Future<Json?> preRestoreCopy() async {
+    final text = await db.meta('pre_restore');
+    return text == null ? null : decodeObject(text);
   }
 
   Future<Json> backup() async {

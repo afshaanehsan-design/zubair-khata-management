@@ -457,7 +457,7 @@ Future<void> showTransaction(
                           ? 'What was sold'
                           : 'Items credited',
                       [
-                        for (final r in billRows(d, t)) _billRow(ctx, r),
+                        for (final r in billRows(d, t, shareFrom: app.shareSource(d))) _billRow(ctx, r),
                         const Divider(height: 18),
                         _factRow(
                           ctx,
@@ -1019,6 +1019,32 @@ class PartyDetails extends StatelessWidget {
                           label: payLabel,
                         ),
                     ],
+                    // Gas bought from a company, with the company filled in.
+                    if (p.data['supplier'] == true)
+                      OutlinedButton.icon(
+                        key: const ValueKey('party-purchase'),
+                        onPressed: () => composeEntry(
+                          ctx,
+                          app,
+                          type: EntryType.purchase,
+                          party: p.id,
+                        ),
+                        icon: Icon(entryIcon(EntryType.purchase)),
+                        label: Text(ctx.t('Purchase')),
+                      ),
+                    // A deposit taken with a sale is paid back from here.
+                    if (book.deposits(p.id) > 0)
+                      OutlinedButton.icon(
+                        key: const ValueKey('party-deposit-refund'),
+                        onPressed: () => composeEntry(
+                          ctx,
+                          app,
+                          type: EntryType.depositRefund,
+                          party: p.id,
+                        ),
+                        icon: const Icon(Icons.undo_rounded),
+                        label: Text(ctx.t('Refund deposit')),
+                      ),
                     OutlinedButton.icon(
                       onPressed: () => previewReport(
                         ctx,

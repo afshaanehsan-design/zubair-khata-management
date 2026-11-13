@@ -209,7 +209,7 @@ void main() {
       await app.saveMaster('account', {'name': 'HBL', 'bank': 'HBL'});
       await receipt(app, party, 10000);
       await app.startBatch();
-      await app.db.saveDraft('composer', {'amount': '5'});
+      app.composerDrafts['context:purchase'] = {'amount': '5'};
       await app.db.setMeta('pre_restore', '{"old":"copy"}');
       await app.db.setMeta('cursor', '7');
       app.rozDrafts['sale'] = {'amount': '9'};
@@ -243,14 +243,15 @@ void main() {
     expect(o.app.batchStarts, isEmpty);
     expect(o.app.rozDrafts, isEmpty);
     expect(o.app.selectedDate, businessDate());
-    expect(await o.app.db.draft('composer'), null);
+    expect(o.app.composerDrafts, isEmpty);
     expect(await meta(o.app), {
       'device': device,
       'language': 'en',
       'initialized': '1',
     });
 
-    // The other two still hold everything.
+    // The other two still hold everything stored. (Form drafts are kept in
+    // memory and end with each organization's session.)
     for (final (id, party) in [(first, 'Ali'), (second.id, 'Bilal')]) {
       await o.switchTo(id);
       expect(o.app.ofKind('party').map((r) => r.name), [party]);
@@ -258,7 +259,6 @@ void main() {
       expect(o.app.book.money('cash'), 10000);
       expect(o.app.ofKind('snapshot').length, 1);
       expect(o.app.batchStarts, isNotEmpty);
-      expect(await o.app.db.draft('composer'), {'amount': '5'});
       expect(await o.app.db.meta('pre_restore'), '{"old":"copy"}');
       expect(await o.app.db.meta('cursor'), '7');
     }

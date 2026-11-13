@@ -333,6 +333,9 @@ class _ReportSource extends DataTableSource {
       ? null
       : DataRow.byIndex(
           index: index,
+          color: report.sections.contains(index)
+              ? const WidgetStatePropertyAll(Color(0xfff6f9f4))
+              : null,
           cells: report.rows[index]
               .map(
                 (c) => DataCell(

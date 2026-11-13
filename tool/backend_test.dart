@@ -230,11 +230,57 @@ Future<void> main() async {
       'Customer, cash and bank equal the Dart fixture',
     );
     check(
-      amounts['cogs'] == '354000' &&
+      amounts['cogs'] == '389400' &&
           amounts['revenue:gas'] == '-460000' &&
           amounts['revenue:bulk'] == '-46000',
-      'Server FIFO and extra-KG billing equal Dart',
+      'Server FIFO consumes cylinder and bulk KG, with separate billing',
     );
+    check(
+      (await pg.query(
+            "select grams::text from public.khata_lots where owner_id='$owner' and id='lot'",
+          )).single.single ==
+          '7020',
+      'Mixed sale deducts 11.8 cylinder KG plus 1.18 bulk KG',
+    );
+    // Exercise the upgrade with an existing owner, not just an empty schema.
+    final legacy = await File('supabase/migrations/202611110002_bank_lines.sql')
+        .readAsString();
+    final legacyStart = legacy.indexOf(
+      'create or replace function khata_private.rebuild',
+    );
+    final legacyEnd = legacy.indexOf('-- apply_command:', legacyStart);
+    await pg.query(legacy.substring(legacyStart, legacyEnd));
+    await pg.query("select khata_private.rebuild('$owner')");
+    check(
+      (await pg.query(
+            "select grams::text from public.khata_lots where owner_id='$owner' and id='lot'",
+          )).single.single ==
+          '8200',
+      'Upgrade fixture starts with the previous cylinder-only stock rule',
+    );
+    await pg.query(
+      await File('supabase/migrations/202611120001_bulk_stock.sql')
+          .readAsString(),
+    );
+    check(
+      (await pg.query(
+                "select grams::text from public.khata_lots where owner_id='$owner' and id='lot'",
+              )).single.single ==
+              '7020' &&
+          (await pg.query(
+                "select sequence::text from public.khata_sync where owner_id='$owner'",
+              )).single.single ==
+              '${saved['sequence']}',
+      'Migration recalculates old bulk stock without changing documents or sync sequence',
+    );
+    // Restore the latest projection after exercising the earlier upgrade:
+    // every later migration again, in order.
+    for (final file in migrations.where(
+      (f) =>
+          f.uri.pathSegments.last.compareTo('202611120001_bulk_stock.sql') > 0,
+    )) {
+      await pg.query(await file.readAsString());
+    }
     check(
       (await apply(fixture))['sequence'] == saved['sequence'],
       'Identical retry returns original receipt',
@@ -303,6 +349,57 @@ Future<void> main() async {
           afterCredit['ar:p'] == '-300000' &&
           afterCredit['cogs'] == '0',
       'Credit note keeps collections and reverses known cost',
+    );
+    check(
+      (await pg.query(
+            "select sum(grams)::text from public.khata_lots where owner_id='$owner'",
+          )).single.single ==
+          '20000',
+      'Physical credit restores cylinder and bulk stock',
+    );
+    final bulkOnly = <String, dynamic>{
+      'type': 'sale',
+      'date': '2026-11-07',
+      'occurredAt': 3,
+      'party': 'p',
+      'quantities': <String, dynamic>{},
+      'extraGrams': 1180,
+      'rate': 460000,
+      'cash': 10000,
+    };
+    check(
+      (await apply(
+                command([change('bulk-only', 'document', bulkOnly)]),
+              ))['status'] ==
+              'accepted' &&
+          (await pg.query(
+                "select sum(grams)::text from public.khata_fifo where owner_id='$owner' and sale='bulk-only'",
+              )).single.single ==
+              '1180' &&
+          (await pg.query(
+                "select sum(debit)::text from public.khata_postings where owner_id='$owner' and document_id='bulk-only' and account='cogs'",
+              )).single.single ==
+              '35400',
+      'Bulk-only sale consumes and costs stock without any cylinder quantities',
+    );
+    final bulkCredit = {
+      ...bulkOnly,
+      'type': 'creditNote',
+      'occurredAt': 4,
+      'sourceInvoice': 'bulk-only',
+      'stockReturned': true,
+      'note': 'Bulk returned',
+    };
+    check(
+      (await apply(
+                command([change('bulk-credit', 'document', bulkCredit)]),
+              ))['status'] ==
+              'accepted' &&
+          (await pg.query(
+                "select sum(grams)::text from public.khata_lots where owner_id='$owner'",
+              )).single.single ==
+              '20000',
+      'A bulk-only physical credit restores stock even with zero cylinder KG',
     );
     final less = await apply(
       command([
@@ -823,6 +920,687 @@ Future<void> main() async {
       'Owner lock orders concurrent device commits',
     );
     await peer.close();
+    // Shared purchases recover actual stock cost without sales or COGS.
+    final stockBeforeSharing = integer(
+      (await pg.query(
+        "select coalesce(sum(grams),0)::text from public.khata_lots where owner_id='$owner'",
+      )).single.single,
+    );
+    check(
+      (await apply(
+            command([
+              change('sharing-stock', 'document', {
+                'type': 'stockAdjustment',
+                'date': '2026-11-09',
+                'occurredAt': 0,
+                'grams': 50000,
+                'cost': 1500000,
+                'costKnown': true,
+                'note': 'Sharing purchase',
+              }),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'Dated purchase stock is available for sharing',
+    );
+    final shared = <String, dynamic>{
+      'type': 'sale',
+      'date': '2026-11-09',
+      'occurredAt': 1,
+      'party': 'p',
+      'quantities': <String, int>{},
+      'extraGrams': 1000,
+      'bulkAtCost': true,
+      'bulkCost': 30000,
+      'cash': 10000,
+      'bank': 5000,
+      'bankAccount': 'b',
+    };
+    final sharedResult = await apply(
+      command([change('shared-pure', 'document', shared)]),
+    );
+    final sharedPostings = {
+      for (final row in await pg.query(
+        "select account,sum(debit)::text from public.khata_postings where owner_id='$owner' and document_id='shared-pure' group by account",
+      ))
+        row.first: row.last,
+    };
+    check(
+      sharedResult['status'] == 'accepted' &&
+          sharedPostings['ar:p'] == '15000' &&
+          sharedPostings['inventory'] == '-30000' &&
+          sharedPostings['purchase-share:cost'] == '0' &&
+          !sharedPostings.containsKey('cogs') &&
+          !sharedPostings.containsKey('revenue:bulk'),
+      'Pure purchase share charges exact cost and posts neither sales nor COGS: $sharedResult $sharedPostings',
+    );
+    final mixedShare = <String, dynamic>{
+      ...shared,
+      'occurredAt': 2,
+      'quantities': {'11800': 1},
+      'customerOwned': true,
+      'rate': 460000,
+      'extraGrams': 1180,
+      'bulkCost': 35400,
+      'cash': 0,
+      'bank': 0,
+    };
+    final mixedResult = await apply(
+      command([change('shared-mixed', 'document', mixedShare)]),
+    );
+    final allClientRecords = [
+      for (final row in await pg.query(
+        "select id,kind,data::text from public.khata_records where owner_id='$owner'",
+      ))
+        Record(
+          row[0]!,
+          row[1]!,
+          Map<String, dynamic>.from(jsonDecode(row[2]!) as Map),
+        ),
+    ];
+    final sharedClient = Book(allClientRecords);
+    final expectedMixed = <String, String>{};
+    for (final posting in sharedClient.postings.where(
+      (p) => p.document == 'shared-mixed',
+    )) {
+      expectedMixed[posting.account] =
+          '${integer(expectedMixed[posting.account]) + posting.debit}';
+    }
+    final actualMixed = {
+      for (final row in await pg.query(
+        "select account,sum(debit)::text from public.khata_postings where owner_id='$owner' and document_id='shared-mixed' group by account",
+      ))
+        row.first: row.last,
+    };
+    check(
+      mixedResult['status'] == 'accepted' &&
+          canonicalJson(actualMixed) == canonicalJson(expectedMixed) &&
+          actualMixed['cogs'] == '354000' &&
+          actualMixed['purchase-share:cost'] == '0' &&
+          actualMixed['revenue:gas'] == '-460000' &&
+          !actualMixed.containsKey('revenue:bulk'),
+      'Mixed cylinder sale and purchase share agree exactly with client FIFO postings: $mixedResult $actualMixed',
+    );
+    final staleShare = await apply(
+      command([
+        change('stale-share', 'document', {
+          ...shared,
+          'occurredAt': 3,
+          'bulkCost': 40000,
+        }),
+      ]),
+    );
+    final missingShare = await apply(
+      command([
+        change('unavailable-share', 'document', {
+          ...shared,
+          'occurredAt': 3,
+          'extraGrams': 1000000,
+        }),
+      ]),
+    );
+    check(
+      staleShare['status'] == 'rejected' &&
+          staleShare['message'] ==
+              'Purchase-share cost changed; refresh the entry' &&
+          missingShare['status'] == 'rejected' &&
+          missingShare['message'] ==
+              'Enter dated stock and purchase cost before sharing gas',
+      'Cloud refuses stale at-cost quotes and uncosted or unavailable shared stock: $staleShare $missingShare',
+    );
+    final changedPurchase = await apply(
+      command(
+        [
+          change('sharing-stock', 'document', {
+            'type': 'stockAdjustment',
+            'date': '2026-11-09',
+            'occurredAt': 0,
+            'grams': 50000,
+            'cost': 1500000,
+            'costKnown': true,
+            'note': 'Sharing purchase',
+            'voided': true,
+            'voidReason': 'Correct supplier cost',
+            'replacement': 'sharing-stock-corrected',
+          }, 1),
+          change('sharing-stock-corrected', 'document', {
+            'type': 'stockAdjustment',
+            'date': '2026-11-09',
+            'occurredAt': 0,
+            'grams': 50000,
+            'cost': 2000000,
+            'costKnown': true,
+            'note': 'Sharing purchase',
+            'replaces': 'sharing-stock',
+          }),
+        ],
+        action: 'correct',
+        reason: 'Correct supplier cost',
+      ),
+    );
+    check(
+      changedPurchase['status'] == 'accepted' &&
+          (await pg.query(
+                "select sum(debit)::text from public.khata_postings where owner_id='$owner' and account='purchase-share:cost'",
+              )).single.single ==
+              '11800' &&
+          (await pg.query(
+                "select data->>'bulkCost' from public.khata_records where owner_id='$owner' and id='shared-mixed'",
+              )).single.single ==
+              '35400',
+      'Backdated cost corrections expose recovery differences while preserving recorded party charges: $changedPurchase',
+    );
+    final shareReturns = await apply(
+      command([
+        change('shared-mixed-return', 'document', {
+          ...mixedShare,
+          'type': 'creditNote',
+          'occurredAt': 4,
+          'sourceInvoice': 'shared-mixed',
+          'stockReturned': true,
+          'note': 'Mixed gas returned',
+        }),
+        change('shared-pure-return', 'document', {
+          ...shared,
+          'type': 'creditNote',
+          'occurredAt': 5,
+          'sourceInvoice': 'shared-pure',
+          'stockReturned': true,
+          'note': 'Shared gas returned',
+        }),
+      ]),
+    );
+    check(
+      shareReturns['status'] == 'accepted' &&
+          integer(
+                (await pg.query(
+                  "select sum(grams)::text from public.khata_lots where owner_id='$owner'",
+                )).single.single,
+              ) ==
+              stockBeforeSharing + 50000 &&
+          (await pg.query(
+                "select sum(debit)::text from public.khata_postings where owner_id='$owner' and account='purchase-share:cost'",
+              )).single.single ==
+              '0',
+      'Pure and mixed sharing returns restore all stock and clear cost recovery: $shareReturns',
+    );
+    for (final badShare in <Map<String, dynamic>>[
+      {...shared, 'bulkAtCost': 'true'},
+      {...shared, 'bulkCost': -1},
+      {...shared, 'bulkCost': 1.5},
+      {...shared}..remove('bulkCost'),
+      {...shared, 'extraGrams': 0},
+      {...shared, 'depositCharge': 100},
+    ]) {
+      String? message;
+      try {
+        await pg.query(
+          'select khata_private.validate_document(\'$owner\',${quote(jsonEncode(badShare))}::jsonb,\'share-validation\')',
+        );
+      } catch (e) {
+        message = '$e';
+      }
+      check(
+        message?.contains('Choose a valid purchase-share quantity and cost') ==
+            true,
+        'Purchase-sharing field validation matches the client: $badShare',
+      );
+    }
+    // Sales entered before their purchase wait for it and take its cost, on
+    // their own date; the server must post exactly what the client does.
+    Future<List<Record>> serverRecords() async => [
+      for (final row in await pg.query(
+        "select id,kind,data::text from public.khata_records where owner_id='$owner'",
+      ))
+        Record(
+          row[0]!,
+          row[1]!,
+          Map<String, dynamic>.from(jsonDecode(row[2]!) as Map),
+        ),
+    ];
+    Future<void> sameAsClient(String label) async {
+      final client = Book(await serverRecords());
+      final expected = <String, int>{};
+      for (final p in client.postings) {
+        final key = '${p.document}|${p.date}|${p.account}';
+        expected[key] = (expected[key] ?? 0) + p.debit;
+      }
+      expected.removeWhere((k, v) => v == 0);
+      final actual = <String, int>{
+        for (final row in await pg.query(
+          "select document_id,date::text,account,sum(debit)::text from public.khata_postings where owner_id='$owner' group by 1,2,3 having sum(debit)<>0",
+        ))
+          '${row[0]}|${row[1]}|${row[2]}': integer(row[3]),
+      };
+      final diff = {
+        for (final k in {...expected.keys, ...actual.keys})
+          if (expected[k] != actual[k]) k: '${expected[k]} vs ${actual[k]}',
+      };
+      final serverLots = {
+        for (final row in await pg.query(
+          "select id,grams::text,coalesce(cost::text,'?') from public.khata_lots where owner_id='$owner'",
+        ))
+          row[0]!: '${row[1]}/${row[2]}',
+      };
+      final clientLots = {
+        for (final l in client.lots) l.id: '${l.grams}/${l.cost ?? '?'}',
+      };
+      check(
+        diff.isEmpty && canonicalJson(serverLots) == canonicalJson(clientLots),
+        '$label: $diff ${canonicalJson(serverLots)} vs ${canonicalJson(clientLots)}',
+      );
+    }
+
+    final stockLeft = integer(
+      (await pg.query(
+        "select coalesce(sum(grams),0)::text from public.khata_lots where owner_id='$owner'",
+      )).single.single,
+    );
+    Map<String, dynamic> backorderDoc(
+      String type,
+      int time,
+      Map<String, dynamic> data, {
+      String date = '2026-11-20',
+    }) => {
+      'type': type,
+      'date': date,
+      'occurredAt': time,
+      'party': 'p',
+      ...data,
+    };
+    final shareLater = backorderDoc('sale', 3, {
+      'quantities': <String, int>{},
+      'extraGrams': 20000,
+      'bulkAtCost': true,
+    });
+    check(
+      (await apply(
+            command([
+              if (stockLeft > 0)
+                change(
+                  'bo-count',
+                  'document',
+                  backorderDoc('stockAdjustment', 0, {
+                    'grams': -stockLeft,
+                    'cost': 0,
+                    'costKnown': false,
+                    'note': 'Counted empty',
+                  }),
+                ),
+              change(
+                'bo-sale-1',
+                'document',
+                backorderDoc('sale', 1, {
+                  'quantities': {'45000': 2},
+                  'customerOwned': true,
+                  'rate': 577000,
+                }),
+              ),
+              change(
+                'bo-loss',
+                'document',
+                backorderDoc('stockAdjustment', 2, {
+                  'grams': -5000,
+                  'cost': 0,
+                  'costKnown': false,
+                  'note': 'Leak',
+                }),
+              ),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'A sale and a stock loss with no stock are accepted and wait',
+    );
+    final noStockShare = await apply(
+      command([
+        change('bo-share-early', 'document', {...shareLater, 'bulkCost': 0}),
+      ]),
+    );
+    check(
+      noStockShare['status'] == 'rejected' &&
+          noStockShare['message'] ==
+              'Enter dated stock and purchase cost before sharing gas',
+      'A share with no stock now or later is refused: $noStockShare',
+    );
+    final laterPurchase = await apply(
+      command([
+        change(
+          'bo-purchase',
+          'document',
+          backorderDoc('purchase', 9, {
+            'grams': 200000,
+            'rate': 572000,
+            'rateUnit': 11800,
+            'amount': 0,
+            'account': 'cash',
+          }),
+        ),
+      ]),
+    );
+    check(
+      laterPurchase['status'] == 'accepted',
+      'The purchase entered after its sales is accepted: $laterPurchase',
+    );
+    await sameAsClient('A later purchase costs the waiting sale and stock loss');
+    final waitingCosts = {
+      for (final row in await pg.query(
+        "select document_id,date::text,account,debit::text from public.khata_postings where owner_id='$owner' and document_id in ('bo-sale-1','bo-loss','bo-purchase') and account in ('cogs','expense:Stock loss','cogs:shortage')",
+      ))
+        '${row[0]}|${row[1]}|${row[2]}': row[3],
+    };
+    check(
+      waitingCosts.keys.toSet().containsAll({
+            'bo-sale-1|2026-11-20|cogs',
+            'bo-loss|2026-11-20|expense:Stock loss',
+          }) &&
+          !waitingCosts.keys.any((k) => k.startsWith('bo-purchase')) &&
+          !waitingCosts.keys.any((k) => k.endsWith('cogs:shortage')),
+      'Waiting gas is costed on its own documents, not as a shortage on the purchase: $waitingCosts',
+    );
+    Future<int> clientCharge(String id, Map<String, dynamic> data) async {
+      final candidate = Record(id, 'document', {...data, 'bulkCost': 0});
+      return Book([
+        ...await serverRecords(),
+        candidate,
+      ]).shareChargeFor(Document(candidate));
+    }
+
+    final quoted = await clientCharge('bo-share', shareLater);
+    final staleLater = await apply(
+      command([
+        change('bo-share-stale', 'document', {
+          ...shareLater,
+          'bulkCost': quoted + 1,
+        }),
+      ]),
+    );
+    final pricedLater = await apply(
+      command([
+        change('bo-share', 'document', {...shareLater, 'bulkCost': quoted}),
+      ]),
+    );
+    check(
+      quoted > 0 &&
+          staleLater['status'] == 'rejected' &&
+          staleLater['message'] ==
+              'Purchase-share cost changed; refresh the entry' &&
+          pricedLater['status'] == 'accepted',
+      'A share entered before its purchase is priced from it at the client quote: $quoted $staleLater $pricedLater',
+    );
+    await sameAsClient('A share before its purchase posts like the client');
+    check(
+      (await apply(
+            command([
+              change(
+                'bo-sale-0',
+                'document',
+                backorderDoc('sale', 1, {
+                  'quantities': {'45000': 4},
+                  'customerOwned': true,
+                  'rate': 577000,
+                }, date: '2026-11-19'),
+              ),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'A back-entered earlier sale is accepted although it moves an existing share',
+    );
+    await sameAsClient('Back-entered sale reorders waiting gas like the client');
+    final purchaseRow = (await pg.query(
+      "select data::text,version::text from public.khata_records where owner_id='$owner' and id='bo-purchase'",
+    )).single;
+    final voided = await apply(
+      command(
+        [
+          change('bo-purchase', 'document', {
+            ...Map<String, dynamic>.from(jsonDecode(purchaseRow[0]!) as Map),
+            'voided': true,
+            'voidReason': 'Wrong supplier',
+          }, integer(purchaseRow[1])),
+        ],
+        action: 'void',
+        reason: 'Wrong supplier',
+      ),
+    );
+    check(
+      voided['status'] == 'accepted',
+      'Voiding the purchase under an existing share is accepted: $voided',
+    );
+    await sameAsClient('With the purchase voided the share waits like the client');
+    final waitingSale = backorderDoc('sale', 1, {
+      'quantities': {'45000': 1},
+      'customerOwned': true,
+      'rate': 577000,
+    }, date: '2026-11-21');
+    check(
+      (await apply(
+            command([
+              change('bo-sale-2', 'document', waitingSale),
+              change('bo-return', 'document', {
+                ...waitingSale,
+                'type': 'creditNote',
+                'occurredAt': 2,
+                'sourceInvoice': 'bo-sale-2',
+                'stockReturned': true,
+                'note': 'Returned before any stock',
+              }),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'Returning an invoice whose gas still waits is accepted',
+    );
+    await sameAsClient('A return cancels waiting gas like the client');
+    check(
+      (await apply(
+            command([
+              change(
+                'bo-purchase-2',
+                'document',
+                backorderDoc('purchase', 1, {
+                  'grams': 300000,
+                  'rate': 571000,
+                  'rateUnit': 11800,
+                  'amount': 0,
+                  'account': 'cash',
+                }, date: '2026-11-22'),
+              ),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'A new purchase covers everything still waiting',
+    );
+    await sameAsClient('The new purchase covers waiting gas like the client');
+    final secondShare = backorderDoc('sale', 2, {
+      'quantities': <String, int>{},
+      'extraGrams': 3000,
+      'bulkAtCost': true,
+    }, date: '2026-11-22');
+    final secondQuote = await clientCharge('bo-share-2', secondShare);
+    check(
+      (await apply(
+                command([
+                  change('bo-share-2', 'document', {
+                    ...secondShare,
+                    'bulkCost': secondQuote,
+                  }),
+                ]),
+              ))['status'] ==
+              'accepted' &&
+          (await apply(
+                command([
+                  change('bo-share-2-credit', 'document', {
+                    ...secondShare,
+                    'bulkCost': secondQuote,
+                    'type': 'creditNote',
+                    'occurredAt': 3,
+                    'sourceInvoice': 'bo-share-2',
+                    'stockReturned': false,
+                    'note': 'Charge forgiven',
+                  }),
+                ]),
+              ))['status'] ==
+              'accepted',
+      'A share and its financial-only credit note are accepted',
+    );
+    await sameAsClient('A forgiven share books its gas as cost like the client');
+    check(
+      (await pg.query(
+            "select coalesce(sum(debit),0)::text from public.khata_postings where owner_id='$owner' and document_id='bo-share-2-credit' and account='cogs'",
+          )).single.single ==
+          '${Book(await serverRecords()).shareCosts['bo-share-2']}',
+      'The forgiven share\'s gas is cost of gas sold',
+    );
+    // A share from a chosen purchase (by reference): its KG come out of that
+    // purchase whatever the entry order, charged the purchase's own rate.
+    Map<String, dynamic> juPurchase({int rate = 572000, int grams = 29695000}) =>
+        backorderDoc('purchase', 9, {
+          'grams': grams,
+          'rate': rate,
+          'rateUnit': 11800,
+          'amount': 0,
+          'account': 'cash',
+          'reference': 'TX-SP-JU',
+        }, date: '2026-11-25');
+    final chosenShare = backorderDoc('sale', 5, {
+      'quantities': <String, int>{},
+      'extraGrams': 14500000,
+      'bulkAtCost': true,
+      'sharePurchase': 'TX-SP-JU',
+    }, date: '2026-11-25');
+    check(
+      (await apply(
+            command([
+              change(
+                'sp-sale',
+                'document',
+                backorderDoc('sale', 1, {
+                  'quantities': {'45000': 2},
+                  'customerOwned': true,
+                  'rate': 577000,
+                }, date: '2026-11-25'),
+              ),
+              change('sp-ju', 'document', juPurchase()),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'Sales and the JU purchase are accepted',
+    );
+    final juCharge = await clientCharge('sp-share', chosenShare);
+    final exactCost = await apply(
+      command([
+        change('sp-share-exact', 'document', {
+          ...chosenShare,
+          'bulkCost': 702881335,
+        }),
+      ]),
+    );
+    final tooMuch = await apply(
+      command([
+        change('sp-share-over', 'document', {
+          ...chosenShare,
+          'extraGrams': 29695001,
+          'bulkCost': 0,
+        }),
+      ]),
+    );
+    final unknown = await apply(
+      command([
+        change('sp-share-unknown', 'document', {
+          ...chosenShare,
+          'sharePurchase': 'TX-NOWHERE',
+          'bulkCost': juCharge,
+        }),
+      ]),
+    );
+    final chosen = await apply(
+      command([
+        change('sp-share', 'document', {...chosenShare, 'bulkCost': juCharge}),
+      ]),
+    );
+    check(
+      juCharge == 702881400 &&
+          exactCost['message'] ==
+              'Purchase-share cost changed; refresh the entry' &&
+          tooMuch['message'] == 'Shared KG exceed the selected purchase' &&
+          unknown['message'] == 'Choose a purchase to share from' &&
+          chosen['status'] == 'accepted',
+      'A share before its chosen purchase is charged JU\'s rate in rupees, and bad ones are refused: $juCharge $exactCost $tooMuch $unknown $chosen',
+    );
+    await sameAsClient('A share from a chosen purchase posts like the client');
+    check(
+      (await pg.query(
+            "select lot||':'||grams from public.khata_fifo where owner_id='$owner' and sale='sp-share'",
+          )).single.single ==
+          'sp-ju:14500000',
+      'The share\'s KG come out of the chosen purchase',
+    );
+    Future<Map> correctPurchase(Map<String, dynamic> next, String id) async {
+      final row = (await pg.query(
+        "select id,data::text,version::text from public.khata_records where owner_id='$owner' and data->>'reference'='TX-SP-JU' and coalesce((data->>'voided')::boolean,false)=false",
+      )).single;
+      return apply(
+        command(
+          [
+            change(row[0]!, 'document', {
+              ...Map<String, dynamic>.from(jsonDecode(row[1]!) as Map),
+              'voided': true,
+              'voidReason': 'Corrected',
+              'replacement': id,
+            }, integer(row[2])),
+            change(id, 'document', {...next, 'replaces': row[0]}),
+          ],
+          action: 'correct',
+          reason: 'Corrected',
+        ),
+      );
+    }
+
+    final shrunk = await correctPurchase(juPurchase(grams: 14000000), 'sp-ju-2');
+    final repriced = await correctPurchase(juPurchase(rate: 600000), 'sp-ju-3');
+    check(
+      shrunk['message'] == 'Shared KG exceed the selected purchase' &&
+          repriced['status'] == 'accepted',
+      'A purchase correction keeps its shares by reference but cannot drop below them: $shrunk $repriced',
+    );
+    await sameAsClient('A repriced chosen purchase posts like the client');
+    final juRow = (await pg.query(
+      "select data::text,version::text from public.khata_records where owner_id='$owner' and id='sp-ju-3'",
+    )).single;
+    final deleted = await apply(
+      command(
+        [
+          change('sp-ju-3', 'document', {
+            ...Map<String, dynamic>.from(jsonDecode(juRow[0]!) as Map),
+            'voided': true,
+            'voidReason': 'Entered twice',
+          }, integer(juRow[1])),
+        ],
+        action: 'void',
+        reason: 'Entered twice',
+      ),
+    );
+    check(
+      deleted['message'] == 'Change the shares of this purchase first',
+      'A purchase with shares cannot be deleted: $deleted',
+    );
+    check(
+      (await apply(
+            command([
+              change('sp-share-return', 'document', {
+                ...chosenShare,
+                'bulkCost': juCharge,
+                'type': 'creditNote',
+                'occurredAt': 20,
+                'sourceInvoice': 'sp-share',
+                'stockReturned': true,
+                'note': 'Gas came back',
+              }),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'A chosen share\'s gas can be returned',
+    );
+    await sameAsClient('A returned chosen share gives the purchase back like the client');
     final head = jsonDecode(
       (await pg.query('select public.sync_status()::text')).single.single!,
     ) as Map;

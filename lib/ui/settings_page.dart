@@ -232,6 +232,24 @@ class _SettingsPageState extends State<SettingsPage> {
                             icon: const Icon(Icons.restore, size: 18),
                             label: Text(ctx.t('Restore backup')),
                           ),
+                          // A restore replaces the data; the copy made just
+                          // before it, restored in turn, undoes it.
+                          if (app.preRestoreSaved)
+                            TextButton.icon(
+                              key: const ValueKey('export-pre-restore'),
+                              onPressed: busy
+                                  ? null
+                                  : () => action(
+                                      () => exportPreRestoreCopy(ctx, app),
+                                      success: 'Backup saved',
+                                    ),
+                              icon: const Icon(Icons.history, size: 18),
+                              label: Text(
+                                ctx.t(
+                                  'Export the backup from before the last restore',
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ],
@@ -459,7 +477,12 @@ class _SettingsPageState extends State<SettingsPage> {
                     children: [
                       SectionHeader(
                         'Sync & recovery',
-                        action: Tag('${app.pendingCount} ${ctx.t('Pending')}'),
+                        action: app.cloudLinked
+                            ? Tag(
+                                '${app.pendingCount} ${ctx.t('Pending')}',
+                                key: const ValueKey('pending-tag'),
+                              )
+                            : null,
                       ),
                       if (app.sync?.message.contains('Cloud recovery') == true)
                         OutlinedButton.icon(
@@ -556,20 +579,40 @@ class _SettingsPageState extends State<SettingsPage> {
 
 Future<void> exportBackup(BuildContext context, AppController app) async {
   final backup = await app.backup();
-  // The business name is in the file name, so the backups of two
-  // organizations made on the same day are told apart.
-  final name = app.businessName.trim().replaceAll(
-    RegExp(r'[\\/:*?"<>|\s]+'),
-    '_',
-  );
   if (context.mounted) {
     await saveBytes(
       context,
       utf8.encode(jsonEncode(backup)),
-      'ZubairKhata_${name.isEmpty ? '' : '${name}_'}Backup_${businessDate()}',
+      '${_backupFilePrefix(app)}Backup_${businessDate()}',
       'json',
     );
   }
+}
+
+/// Saves the backup made just before the last restore or cloud reconnect.
+/// Restoring that file undoes the restore.
+Future<void> exportPreRestoreCopy(
+  BuildContext context,
+  AppController app,
+) async {
+  final copy = await app.preRestoreCopy();
+  if (copy == null || !context.mounted) return;
+  await saveBytes(
+    context,
+    utf8.encode(jsonEncode(copy)),
+    '${_backupFilePrefix(app)}BeforeRestore_${businessDate()}',
+    'json',
+  );
+}
+
+/// The business name is in the file name, so the backups of two
+/// organizations made on the same day are told apart.
+String _backupFilePrefix(AppController app) {
+  final name = app.businessName.trim().replaceAll(
+    RegExp(r'[\\/:*?"<>|\s]+'),
+    '_',
+  );
+  return 'ZubairKhata_${name.isEmpty ? '' : '${name}_'}';
 }
 
 /// Asks before [Organizations.removeCurrent]: says what is deleted, offers a

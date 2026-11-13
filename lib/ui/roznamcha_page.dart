@@ -477,9 +477,11 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       ),
       RozStat(
         'Total Gas Dispatch (KG)',
-        '${kg(day.cylinderGrams)} kg',
-        sub: [for (final s in sizes) '${sizeLabel(s)}: ${day.cylinders[s]}']
-            .join(' · '),
+        '${kg(day.dispatchGrams)} kg',
+        sub: [
+          for (final s in sizes) '${sizeLabel(s)}: ${day.cylinders[s]}',
+          if (day.bulkGrams > 0) '${t('Bulk')} ${kg(day.bulkGrams)} kg',
+        ].join(' · '),
       ),
       RozStat(
         'Calculated Bill',
@@ -518,6 +520,13 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
           ),
         ),
       ),
+      if (day.sharedGrams > 0)
+        RozStat(
+          'Purchase shares',
+          rs(day.shareAmount),
+          sub:
+              '${kg(day.sharedGrams)} kg · ${t('At FIFO cost; no sales profit')}',
+        ),
     ];
     return LayoutBuilder(
       builder: (context, box) {
@@ -891,7 +900,8 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         ),
         if (d.extraGrams > 0)
           Text(
-            '${context.t('Bulk')} ${kg(d.extraGrams)} KG (${context.t('sirf customer khata')})',
+            '${context.t(d.bulkAtCost ? 'Purchase share (at cost)' : 'Bulk')} ${kg(d.extraGrams)} KG'
+            '${app.shareSource(d).isEmpty ? '' : ' · ${app.shareSource(d)}'}',
             style: _mutedStyle,
           ),
         if (d.note.isNotEmpty)
@@ -924,7 +934,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
           _aCols[3 + sizes.indexOf(s)],
           Text(_qty(d, s) == 0 ? '—' : '${_qty(d, s)}', style: _cellStyle),
         ),
-      _cell(_aCols[6], _num(sale ? money(d.rate) : '—')),
+      _cell(_aCols[6], _num(sale && !d.purchaseShare ? money(d.rate) : '—')),
       _cell(_aCols[7], _num(sale ? money(d.total) : '—', style: _boldStyle)),
       _cell(
         _aCols[8],
@@ -981,7 +991,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         '${context.t('Parchi')} ${d.data['vehicle']}',
       for (final s in sizes)
         if (_qty(d, s) > 0) '${sizeLabel(s)} × ${_qty(d, s)}',
-      if (sale) '${context.t('Rate')} ${money(d.rate)}',
+      if (sale && !d.purchaseShare) '${context.t('Rate')} ${money(d.rate)}',
       if (sale) '${context.t('Bill')} ${money(d.total)}',
       if (cash > 0) '${context.t('Cash')} ${money(cash)}',
       if (bank > 0 && d.type == EntryType.deposit)
@@ -1186,7 +1196,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
             _num('${day.cylinders[s]}', style: style),
           ),
         _cell(_aCols[6], const SizedBox()),
-        _cell(_aCols[7], _num(money(day.bill), style: style)),
+        _cell(_aCols[7], _num(money(day.totalBilled), style: style)),
         _cell(_aCols[8], _num(money(day.cashIn), style: style)),
         _cell(_aCols[9], _num(money(day.bankCust), style: style)),
         if (direct) _cell(_aDirect, _num(money(day.direct), style: style)),
@@ -1361,15 +1371,11 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
     final company = rozFormOf(d) == RozForm.companyPay;
     final bank = d.account != 'cash';
     final party = d.party.isEmpty ? '—' : app.name(d.party);
-    // The form no longer asks "Customer (kis ke liye)"; an older entry that
-    // has one still shows it.
-    final customerNote = '${d.data['customerNote'] ?? ''}'.trim(),
-        branch = '${d.data['branch'] ?? ''}'.trim();
     final details = [
       if (d.note.isNotEmpty) d.note,
-      if (company && customerNote.isNotEmpty)
-        '${context.t('Customer')}: $customerNote',
-      if (company && branch.isNotEmpty) '${context.t('Branch')}: $branch',
+      if (company &&
+          '${d.data['customerNote'] ?? ''}${d.data['branch'] ?? ''}'.isNotEmpty)
+        '${context.t('Customer')}: ${'${d.data['customerNote'] ?? ''}'.isEmpty ? '—' : d.data['customerNote']} · ${context.t('Branch')}: ${'${d.data['branch'] ?? ''}'.isEmpty ? '—' : d.data['branch']}',
       if (bank) '[${context.t('Bank se')}: ${_accountName(d.account)}]',
     ];
     if (!wide) {
@@ -1874,7 +1880,9 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       _snack(context.t('Pehle 11.8 KG ka rate likhein'));
       return;
     }
-    final all = full.aamad.where((d) => d.type == EntryType.sale);
+    final all = full.aamad.where(
+      (d) => d.type == EntryType.sale && !d.purchaseShare,
+    );
     final sales = all.where((d) => d.rate != rate).length;
     if (all.isEmpty) {
       _snack(context.t('Aaj koi sale entry nahi'));

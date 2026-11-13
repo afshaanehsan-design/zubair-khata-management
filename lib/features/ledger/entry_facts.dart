@@ -81,6 +81,7 @@ int _cylinderCount(Document d) => [
 /// What kind of entry this is, in words ("Opening balance" rather than the
 /// bookkeeping type "adjustment").
 String entryTypeLabel(Document d, Words t) {
+  if (d.type == EntryType.sale && d.purchaseShare) return t('Purchase share');
   if (d.type == EntryType.adjustment) {
     return t(isOpeningBalance(d) ? 'Opening balance' : 'Adjustment');
   }
@@ -271,16 +272,19 @@ bool entryAmountNegative(Document d) =>
     (d.type == EntryType.stockAdjustment && d.value('grams') < 0);
 
 /// What the headline figure of the details dialog is called.
-String entryAmountLabel(Document d, Words t) => t(switch (d.type) {
-  EntryType.sale => 'Bill total',
-  EntryType.creditNote => 'Credit note',
-  EntryType.purchase => 'Purchase bill',
-  EntryType.receipt => 'Amount received',
-  EntryType.payment || EntryType.depositRefund => 'Amount paid',
-  EntryType.stockAdjustment || EntryType.historicalSale => 'Gas',
-  EntryType.cylinder => 'Cylinders',
-  _ => 'Amount',
-});
+String entryAmountLabel(Document d, Words t) =>
+    d.purchaseShare && d.type == EntryType.sale
+    ? t('Purchase share amount')
+    : t(switch (d.type) {
+        EntryType.sale => 'Bill total',
+        EntryType.creditNote => 'Credit note',
+        EntryType.purchase => 'Purchase bill',
+        EntryType.receipt => 'Amount received',
+        EntryType.payment || EntryType.depositRefund => 'Amount paid',
+        EntryType.stockAdjustment || EntryType.historicalSale => 'Gas',
+        EntryType.cylinder => 'Cylinders',
+        _ => 'Amount',
+      });
 
 EntryStatus? entryStatus(AppController app, Document d, Words t) {
   if (d.voided) return EntryStatus(t('Voided'), true);
@@ -299,16 +303,17 @@ EntryStatus? entryStatus(AppController app, Document d, Words t) {
   return null;
 }
 
-/// The bill of a sale or credit note, line by line.
-List<BillRow> billRows(Document d, Words t) => [
+/// The bill of a sale or credit note, line by line. [shareFrom] names the
+/// purchase a share's bulk came from (see [AppController.shareSource]).
+List<BillRow> billRows(Document d, Words t, {String shareFrom = ''}) => [
   for (final l in d.saleLines)
     BillRow('${sizeLabel(l.size)} × ${l.count}', '${kg(l.grams)} KG', l.amount),
   if (d.lineRounding != 0) BillRow(t('Rounding'), null, d.lineRounding),
   if (d.extraGrams > 0)
     BillRow(
-      t('Extra KG (billing only)'),
-      '${kg(d.extraGrams)} KG',
-      d.bulkRevenue,
+      t(d.bulkAtCost ? 'Purchase share (at cost)' : 'Bulk KG'),
+      '${kg(d.extraGrams)} KG${shareFrom.isEmpty ? '' : ' · $shareFrom'}',
+      d.bulkBill,
     ),
   if (d.type == EntryType.sale && d.value('depositCharge') != 0)
     BillRow(t('Deposit charged'), null, d.value('depositCharge')),
@@ -438,7 +443,7 @@ List<Fact> appliedFacts(AppController app, Document d, Words t) {
           app.record(claim) == null
               ? claim
               : _join([
-                  t('Sale'),
+                  entryTypeLabel(Document(app.record(claim)!), t),
                   Document(app.record(claim)!).date,
                   Document(app.record(claim)!).reference,
                 ]),
@@ -540,6 +545,7 @@ String postingLabel(AppController app, String key, Words t) {
   return switch (kind) {
     'cogs' => t('Cost of gas sold'),
     'inventory' => t('Gas stock'),
+    'purchase-share' => t('Purchase share cost recovery'),
     'ar' => t('{name} owes you').replaceAll('{name}', app.name(id)),
     'ap' => t('You owe {name}').replaceAll('{name}', app.name(id)),
     'deposit' => t(

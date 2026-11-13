@@ -128,9 +128,8 @@ void main() {
       expect(find.textContaining('Less / Kami — Ali Traders'), findsOneWidget);
       expect(find.text('auto (Aamad se)'), findsOneWidget);
       expect(find.text('Company ko payment'), findsWidgets);
-      // The company payment shows its branch, without an empty "Customer: —".
-      expect(find.text('Branch: Lahore'), findsOneWidget);
-      expect(find.textContaining('Customer: —'), findsNothing);
+      // A company payment shows who it was for (kis ke liye) and the branch.
+      expect(find.text('Customer: — · Branch: Lahore'), findsOneWidget);
       expect(find.text('Hisab Mel (Safi Baqaya kaise bana)'), findsOneWidget);
       // No "fix the opening" button: the starting cash is an ordinary row.
       expect(find.text('Theek karo'), findsNothing);

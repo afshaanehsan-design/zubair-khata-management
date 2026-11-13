@@ -56,9 +56,9 @@ class KhataDatabase extends GeneratedDatabase {
     await customStatement(
       'CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
     );
-    await customStatement(
-      'CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
-    );
+    // Files from before 12 November 2026 also have a `drafts` table, no
+    // longer used (composer drafts are kept in memory, like the Roznamcha
+    // form's). It is left in place; [wipe] empties it with every other table.
   }
 
   Future<String?> meta(String key) async => (await customSelect(
@@ -141,20 +141,6 @@ class KhataDatabase extends GeneratedDatabase {
         if (cursor != previous) throw StateError('Invalid sync cursor');
         await setMeta('cursor', '$cursor');
       });
-  Future<void> saveDraft(String key, Json data) => customStatement(
-    'INSERT INTO drafts(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
-    [key, jsonEncode(data)],
-  );
-  Future<Json?> draft(String key) async {
-    final row = await customSelect(
-      'SELECT data FROM drafts WHERE id=?',
-      variables: [Variable(key)],
-    ).getSingleOrNull();
-    return row == null ? null : decodeObject(row.read<String>('data'));
-  }
-
-  Future<void> deleteDraft(String key) =>
-      customStatement('DELETE FROM drafts WHERE id=?', [key]);
 
   /// The only metadata a reset keeps: which device this is, its language and
   /// its cloud connection (`owner` binds it to the signed-in account). Every

@@ -43,6 +43,19 @@ class Report {
   final List<List<Cell>> rows;
   final List<String> notes;
   final bool urdu;
+
+  /// Indexes of [rows] that head a section (the Roznamcha's Overview, A and
+  /// B). The PDF and the on-screen table shade them.
+  final Set<int> sections;
+
+  /// More than 1 prints the PDF like the business's paper sheets: that many
+  /// narrow grids side by side on each page, with one-line rows of a fixed
+  /// height that fill the first grid, then the next (pending balances). The
+  /// first column is a centred row number; [notes] go under the last grids.
+  final int grids;
+
+  /// Relative column widths inside one grid; equal when empty.
+  final List<double> flex;
   const Report({
     required this.title,
     required this.business,
@@ -51,6 +64,9 @@ class Report {
     required this.rows,
     this.notes = const [],
     this.urdu = false,
+    this.sections = const {},
+    this.grids = 1,
+    this.flex = const [],
   });
 }
 
@@ -65,6 +81,7 @@ const reportNames = [
   'Daily customer balances',
   'Sales register',
   'Purchase register',
+  'Purchase shares',
   'Office expenses',
   'Gas stock',
   'FIFO allocations',
@@ -90,8 +107,14 @@ Report buildReport(
   List<String> columns = [];
   final rows = <List<Cell>>[];
   final notes = <String>[];
+  final sections = <int>{};
   void add(List<dynamic> values) =>
       rows.add(values.map((v) => v is Cell ? v : Cell('$v')).toList());
+  void section(String date, String label) {
+    sections.add(rows.length);
+    add([date, '', label, '', '']);
+  }
+
   switch (kind) {
     case 'Overdue':
       columns = ['Name', 'Reference', 'Date', 'Due date', 'Outstanding'];
@@ -172,6 +195,7 @@ Report buildReport(
         'Opening',
         'Cylinder billing',
         'Extra-KG billing',
+        'Purchase share amount',
         'Cash',
         'Bank',
         'Direct to party',
@@ -203,6 +227,7 @@ Report buildReport(
                   .where((d) => d.type == EntryType.sale)
                   .fold(0, (v, d) => v + d.bulkRevenue),
             ),
+            Cell.amount(activity.fold(0, (v, d) => v + d.shareCharge)),
             Cell.amount(activity.fold(0, (v, d) => v + d.value('cash'))),
             Cell.amount(activity.fold(0, (v, d) => v + d.bankIn)),
             Cell.amount(activity.fold(0, (v, d) => v + d.direct)),
@@ -252,11 +277,13 @@ Report buildReport(
         'Balance',
       ];
       for (final d in docs.where(
-        (d) => [
-          EntryType.sale,
-          EntryType.historicalSale,
-          EntryType.creditNote,
-        ].contains(d.type),
+        (d) =>
+            !d.purchaseShare &&
+            [
+              EntryType.sale,
+              EntryType.historicalSale,
+              EntryType.creditNote,
+            ].contains(d.type),
       )) {
         final sign = d.type == EntryType.creditNote ? -1 : 1;
         add([
@@ -269,7 +296,7 @@ Report buildReport(
                 : d.type == EntryType.creditNote &&
                       d.data['stockReturned'] != true
                 ? 0
-                : sign * d.cylinderGrams,
+                : sign * d.ownSaleGrams,
           ),
           Cell.amount(
             sign *
@@ -278,11 +305,42 @@ Report buildReport(
                     : d.cylinderRevenue),
           ),
           Cell.amount(sign * d.bulkRevenue),
-          Cell.amount(sign * d.total),
+          Cell.amount(sign * (d.total - d.shareCharge)),
           Cell.amount(d.value('cash')),
           Cell.amount(d.bankIn),
           Cell.amount(d.direct),
           Cell.amount(book.invoiceDue[d.id] ?? 0),
+        ]);
+      }
+    case 'Purchase shares':
+      columns = [
+        'Date',
+        'Reference',
+        'Name',
+        'Weight (KG)',
+        'Purchase share amount',
+        'FIFO cost',
+        'Cost difference',
+        'Share from',
+      ];
+      for (final d in docs.where(
+        (d) =>
+            d.bulkAtCost &&
+            [EntryType.sale, EntryType.creditNote].contains(d.type),
+      )) {
+        final sign = d.type == EntryType.creditNote ? -1 : 1;
+        final cost = book.shareCosts[d.id] ?? 0;
+        add([
+          d.date,
+          d.reference,
+          app.name(d.party),
+          Cell.weight(sign * d.extraGrams),
+          Cell.amount(sign * d.shareCharge),
+          Cell.amount(cost),
+          Cell.amount(cost - sign * d.shareCharge),
+          app.shareSource(d).isEmpty
+              ? t('Oldest stock first (FIFO)')
+              : app.shareSource(d),
         ]);
       }
     case 'Purchase register':
@@ -335,9 +393,9 @@ Report buildReport(
       for (final d in docs) {
         final change = switch (d.type) {
           EntryType.purchase || EntryType.stockAdjustment => d.value('grams'),
-          EntryType.sale => -d.cylinderGrams,
+          EntryType.sale => -d.saleGrams,
           EntryType.creditNote =>
-            d.data['stockReturned'] == true ? d.cylinderGrams : 0,
+            d.data['stockReturned'] == true ? d.saleGrams : 0,
           EntryType.historicalSale => -d.value('grams'),
           _ => 0,
         };
@@ -360,7 +418,10 @@ Report buildReport(
       if (opening != 0) add([from, '', t('Opening'), '', Cell.weight(opening)]);
     case 'FIFO allocations':
       columns = ['Sale reference', 'Purchase lot', 'Weight (KG)', 'Cost'];
-      for (final a in book.allocations.where(
+      // A sale entered before its purchase gets its lot later, possibly
+      // after this range, so read the allocations from everything known.
+      final known = app.book;
+      for (final a in known.allocations.where(
         (a) => docs.any((d) => d.id == a.sale),
       )) {
         add([
@@ -372,7 +433,7 @@ Report buildReport(
           Cell.amount(a.cost),
         ]);
       }
-      for (final e in book.uncostedSales.entries.where(
+      for (final e in known.uncostedSales.entries.where(
         (e) => docs.any((d) => d.id == e.key),
       )) {
         add([
@@ -385,25 +446,29 @@ Report buildReport(
     case 'Profit report':
       columns = ['Description', 'Amount'];
       final ids = docs.map((d) => d.id).toSet();
-      int sum(String prefix) => book.postings
+      // These entries' own postings, as known now: a sale entered before its
+      // purchase gets its cost when the stock arrives, possibly after this
+      // range, and that cost belongs to the sale's day.
+      final known = app.book;
+      int sum(String prefix) => known.postings
           .where(
             (p) => ids.contains(p.document) && p.account.startsWith(prefix),
           )
           .fold(0, (v, p) => v + p.debit);
-      final sales = -sum('revenue:gas'),
+      final cylinderSales = -sum('revenue:gas'),
+          bulkSales = -sum('revenue:bulk'),
+          sales = cylinderSales + bulkSales,
           cogs = sum('cogs'),
           expense = sum('expense:');
-      add([t('Cylinder billing'), Cell.amount(sales)]);
+      add([t('Cylinder billing'), Cell.amount(cylinderSales)]);
+      add([t('Extra-KG billing'), Cell.amount(bulkSales)]);
       add([t('Cost of gas sold'), Cell.amount(cogs)]);
       add([t('Gross profit'), Cell.amount(sales - cogs)]);
       add([t('Operating expenses'), Cell.amount(expense)]);
       add([t('Net profit'), Cell.amount(sales - cogs - expense)]);
-      add([t('Extra-KG billing'), Cell.amount(-sum('revenue:bulk'))]);
-      if (book.profitIncomplete) {
+      if (known.profitIncomplete) {
         notes.add(
-          t(
-            'Uncosted stock and extra-KG billing are excluded from complete profit.',
-          ),
+          t('Uncosted stock and historical summaries make profit incomplete.'),
         );
       }
     case 'Cylinder custody':
@@ -451,22 +516,106 @@ Report buildReport(
         ]);
       }
     case 'Daily roznamcha':
-      // Printed like the original page: A (Aamad), B (Kharcha), Safi Baqaya.
+      // Printed like the original page: the day's overview (the page's
+      // opening strip and summary cards), A (Aamad), B (Kharcha), Safi Baqaya.
       columns = ['Date', 'Reference', 'Description', 'Name', 'Amount'];
       final cash = book.ledger('money:cash');
       String name(Document d) => d.party.isEmpty ? '' : app.name(d.party);
       String join(List<String> parts) =>
           parts.where((p) => p.trim().isNotEmpty).join(' · ');
-      for (final date in docs.map((d) => d.date).toSet().toList()..sort()) {
-        final opening = cash
-            .where((p) => p.date.compareTo(date) < 0)
-            .fold(0, (v, p) => v + p.debit);
-        final day = RoznamchaDay(
-          date,
-          opening,
-          docs.where((d) => d.date == date),
+      final days = [
+        for (final date in docs.map((d) => d.date).toSet().toList()..sort())
+          RoznamchaDay(
+            date,
+            cash
+                .where((p) => p.date.compareTo(date) < 0)
+                .fold(0, (v, p) => v + p.debit),
+            docs.where((d) => d.date == date),
+          ),
+      ];
+      // Gas in stock at the end of each day, worked back from the last one
+      // (a day's gas in and out are exactly its stock movements in the book),
+      // so a long range does not replay the book once per day.
+      final gasClose = List.filled(days.length, book.gasGrams);
+      for (var i = days.length - 2; i >= 0; i--) {
+        gasClose[i] = gasClose[i + 1] - days[i + 1].gasIn + days[i + 1].gasOut;
+      }
+      // As on the page: no gas line until gas stock has been entered.
+      final hasGas = app.book.documents.any(
+        (d) =>
+            d.type == EntryType.purchase || d.type == EntryType.stockAdjustment,
+      );
+      String gas(int g) => g < 0 ? '${t('Udhar')} ${kg(-g)}' : kg(g);
+      for (var i = 0; i < days.length; i++) {
+        final day = days[i];
+        final date = day.date;
+        void overview(String label, List<String> details, [Cell? amount]) =>
+            add([
+              date,
+              '',
+              '$label — ${details.join(' · ')}',
+              '',
+              amount ?? const Cell(''),
+            ]);
+        section(date, t('Overview'));
+        final shown = day.opening + day.cashAdj;
+        final cashOnly = day.openings.where(
+          (d) => d.data['target'] == 'money:cash',
         );
-        add([date, '', t('A: Aamad / Wasooli'), '', '']);
+        add([
+          date,
+          '',
+          [
+            if (day.wd > 0)
+              '${t('Opening (sabiqa)')} ${money(shown)} + ${t('Bank se Nikali')} ${money(day.wd)} = ${money(shown + day.wd)}'
+            else
+              t('Opening (sabiqa)'),
+            if (day.cashAdj != 0 && day.opening != 0)
+              '(${t('pichla closing')} ${money(day.opening)}, ${t(cashOnly.every(isOpeningBalance) ? 'Opening cash' : 'Adjustment')} ${day.cashAdj > 0 ? '+' : ''}${money(day.cashAdj)})',
+          ].join(' '),
+          '',
+          Cell.amount(shown),
+        ]);
+        overview(t('A: Aamad (Opening + Wasooli + Nikali)'), [
+          '${t('Cash')} ${money(day.cashIn)}',
+          '${t('Bank')} ${money(day.bankCust)}',
+          if (day.direct > 0) '${t('Direct')} ${money(day.direct)}',
+          '${t('Nikali')} ${money(day.wd)}',
+        ], Cell.amount(day.left));
+        overview(t('B: Kharcha + Bank Jama'), [
+          '${t('Kharcha (cash)')} ${money(day.kharchaCash)}',
+          '${t('Bank jama')} ${money(day.bankCust + day.depMan)}',
+          if (day.direct > 0) '${t('Direct')} ${money(day.direct)}',
+          if (day.kharchaBank > 0)
+            '${t('Bank se diye')} ${money(day.kharchaBank)}',
+        ], Cell.amount(day.rightTotal));
+        overview(t('Safi Baqaya = A − B (Cash in Hand)'), [
+          '${t('Cash')}: ${money(day.safi)}',
+          '${t('Bank (aaj)')}: ${day.bankNet > 0 ? '+' : ''}${money(day.bankNet)}',
+        ], Cell.amount(day.safi));
+        overview(t('Calculated Bill'), [
+          '${t('Cylinder')} ${money(day.cylinderBill)}',
+          '${t('Bulk')} ${money(day.bulkBill)}',
+        ], Cell.amount(day.bill));
+        if (day.sharedGrams > 0) {
+          overview(t('Purchase shares'), [
+            '${kg(day.sharedGrams)} kg',
+            t('At FIFO cost; no sales profit'),
+          ], Cell.amount(day.shareAmount));
+        }
+        // Weights stay in the description: the Amount column is rupees.
+        overview(t('Total Gas Dispatch (KG)'), [
+          '${kg(day.dispatchGrams)} kg',
+          for (final s in sizes) '${sizeLabel(s)}: ${day.cylinders[s]}',
+          if (day.bulkGrams > 0) '${t('Bulk')} ${kg(day.bulkGrams)} kg',
+        ]);
+        if (hasGas) {
+          final close = gasClose[i];
+          overview(t('Gas (KG)'), [
+            '${t('Opening')} ${gas(close - day.gasIn + day.gasOut)} + ${kg(day.gasIn)} − ${kg(day.gasOut)} = ${gas(close)}',
+          ]);
+        }
+        section(date, t('A: Aamad / Wasooli'));
         for (final d in day.aamad) {
           final deposit = d.type == EntryType.deposit;
           final cashIn = deposit
@@ -484,6 +633,8 @@ Report buildReport(
                     ? 'Company se Wasooli'
                     : deposit
                     ? 'Deposit'
+                    : d.purchaseShare
+                    ? 'Purchase share'
                     : 'Wasooli / Sale',
               ),
               if ('${d.data['vehicle'] ?? ''}'.isNotEmpty)
@@ -491,9 +642,13 @@ Report buildReport(
               for (final s in sizes)
                 if (integer((d.data['quantities'] as Map?)?['$s']) > 0)
                   '${sizeLabel(s)} × ${integer((d.data['quantities'] as Map?)?['$s'])}',
-              if (d.extraGrams > 0) '${t('Bulk')} ${kg(d.extraGrams)} KG',
-              if (d.type == EntryType.sale)
+              if (d.extraGrams > 0)
+                '${t(d.bulkAtCost ? 'Purchase share (at cost)' : 'Bulk')} ${kg(d.extraGrams)} KG'
+                '${app.shareSource(d).isEmpty ? '' : ' · ${app.shareSource(d)}'}',
+              if (d.type == EntryType.sale && !d.purchaseShare)
                 '${t('Rate')} ${money(d.rate)} · ${t('Bill')} ${money(d.total)}',
+              if (d.type == EntryType.sale && d.purchaseShare)
+                '${t('Purchase share amount')} ${money(d.total)}',
               if (cashIn > 0) '${t('Cash')} ${money(cashIn)}',
               if (deposit && bankIn > 0)
                 '${t('Bank')} ${money(bankIn)} (${app.name(d.account)})',
@@ -578,7 +733,7 @@ Report buildReport(
           '',
           Cell.amount(day.left),
         ]);
-        add([date, '', t('B: Kharcha'), '', '']);
+        section(date, t('B: Kharcha'));
         for (final d in day.kharcha) {
           add([
             date,
@@ -697,6 +852,7 @@ Report buildReport(
   final totals = switch (kind) {
     'Sales register' => [3, 4, 5, 6, 7, 8, 9, 10],
     'Purchase register' => [4, 6, 7],
+    'Purchase shares' => [3, 4, 5, 6],
     'Customer balances' || 'Udhari' => [2, 3, 4],
     'Office expenses' => [4],
     'Deposit liabilities' => [2],
@@ -728,6 +884,7 @@ Report buildReport(
     rows: rows,
     notes: notes,
     urdu: urdu,
+    sections: sections,
   );
 }
 
@@ -853,6 +1010,61 @@ Report snapshotReport(AppController app, Record snapshot, {bool urdu = false}) {
   );
 }
 
+/// Pending balances (بقایا جات) of [parties], in the order given: the parties
+/// the Parties page is showing, with its filter, Archived switch and search.
+/// Laid out like the business's paper sheet: two grids a page, each with a
+/// number, the name and one balance. The balance is the party's khata
+/// balance over the whole book ([Book.partyBalance], both sides netted):
+/// what you will receive is written plainly, what you will pay with a "+".
+/// Settled parties are left out; the totals are the note under the grids.
+/// [filter], [archived] and [search] only describe the list in the subtitle.
+Report pendingReport(
+  AppController app,
+  Iterable<Record> parties, {
+  String filter = 'All',
+  bool archived = false,
+  String search = '',
+  bool urdu = false,
+}) {
+  final t = Words(urdu), book = app.book, rows = <List<Cell>>[];
+  var receive = 0, pay = 0;
+  for (final p in parties) {
+    final balance = book.partyBalance(p.id);
+    if (balance == 0) continue;
+    if (balance > 0) {
+      receive += balance;
+    } else {
+      pay -= balance;
+    }
+    rows.add([
+      Cell('${rows.length + 1}', rows.length + 1),
+      Cell(p.name),
+      Cell(balance > 0 ? money(balance) : '+${money(-balance)}', balance / 100),
+    ]);
+  }
+  final term = search.trim();
+  return Report(
+    title: t('Pending balances'),
+    business: app.businessName,
+    subtitle: [
+      businessDate(),
+      t(filter),
+      if (archived) t('Archived'),
+      if (term.isNotEmpty) '${t('Search')}: $term',
+      '+ = ${t('You will pay')}',
+    ].join(' · '),
+    columns: ['No.', 'Name', 'Baqaya jaat'].map(t.call).toList(),
+    rows: rows,
+    notes: [
+      if (rows.isNotEmpty)
+        '${t('Total')} (${rows.length}): ${t('You will receive')} ${money(receive)} · ${t('You will pay')} +${money(pay)}',
+    ],
+    urdu: urdu,
+    grids: 2,
+    flex: const [1, 4.6, 3],
+  );
+}
+
 Report invoiceReport(AppController app, Document d, {bool urdu = false}) {
   final t = Words(urdu), rows = <List<Cell>>[];
   void total(String label, int amount, {String detail = ''}) => rows.add([
@@ -875,11 +1087,17 @@ Report invoiceReport(AppController app, Document d, {bool urdu = false}) {
     if (d.lineRounding != 0) total('Rounding', d.lineRounding);
     if (d.extraGrams > 0) {
       rows.add([
-        Cell(t('Extra KG (billing only)')),
+        Cell(t(d.bulkAtCost ? 'Purchase share (at cost)' : 'Bulk KG')),
         const Cell(''),
         Cell.weight(d.extraGrams),
-        Cell.amount(d.rate),
-        Cell.amount(d.bulkRevenue),
+        d.bulkAtCost
+            ? Cell(
+                app.shareSource(d).isEmpty
+                    ? t('FIFO cost')
+                    : app.shareSource(d),
+              )
+            : Cell.amount(d.rate),
+        Cell.amount(d.bulkBill),
       ]);
     }
     if (d.value('depositCharge') != 0) {
@@ -910,7 +1128,11 @@ Report invoiceReport(AppController app, Document d, {bool urdu = false}) {
   }
   return Report(
     title:
-        '${t(d.type == EntryType.creditNote ? 'Credit note' : 'Invoice / receipt')} ${d.reference}',
+        '${t(d.type == EntryType.creditNote
+            ? 'Credit note'
+            : d.purchaseShare
+            ? 'Purchase share'
+            : 'Invoice / receipt')} ${d.reference}',
     business: app.businessName,
     subtitle:
         '${d.date} · ${app.name(d.party)} · ${app.record(d.party)?.data['phone'] ?? ''}',
@@ -948,6 +1170,60 @@ class UrduPdfRenderer implements PdfTextRenderer {
   final bool rtl;
   UrduPdfRenderer({this.latinFont, this.rtl = false});
   final Map<String, pw.Widget> _cache = {};
+  final Map<String, (pw.MemoryImage, double, double)> _lines = {};
+
+  /// One line at its natural size, with no space around it, for the
+  /// fixed-height rows of a grid report. The caller places it and scales it
+  /// down when it is wider than its cell.
+  Future<pw.Widget> line(String text, {double fontSize = 9}) async {
+    if (!RegExp(r'[\u0600-\u08ff\ufb50-\ufdff\ufe70-\ufeff]').hasMatch(text)) {
+      return pw.Text(
+        text,
+        maxLines: 1,
+        softWrap: false,
+        style: pw.TextStyle(fontSize: fontSize, font: latinFont),
+      );
+    }
+    // The picture is kept, not the widget: a widget holds its own place on
+    // the page, and the same text is drawn on every page (the grid heads).
+    final key = '$text|$fontSize';
+    final kept = _lines[key];
+    if (kept != null) {
+      return pw.Image(kept.$1, width: kept.$2, height: kept.$3);
+    }
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontFamily: 'NotoUrdu',
+          fontSize: fontSize,
+          height: 1.9,
+          color: Colors.black,
+        ),
+      ),
+      maxLines: 1,
+      textDirection: TextDirection.rtl,
+      locale: const Locale('ur'),
+    )..layout();
+    final recorder = ui.PictureRecorder(), canvas = Canvas(recorder);
+    const scale = 300 / 72;
+    final width = painter.width + 2, height = painter.height + 2;
+    canvas.scale(scale);
+    painter.paint(canvas, const Offset(1, 1));
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(
+      (width * scale).ceil(),
+      (height * scale).ceil(),
+    );
+    final png = await image.toByteData(format: ui.ImageByteFormat.png);
+    final memory = pw.MemoryImage(png!.buffer.asUint8List());
+    image.dispose();
+    picture.dispose();
+    painter.dispose();
+    _lines[key] = (memory, width, height);
+    return pw.Image(memory, width: width, height: height);
+  }
+
   @override
   Future<pw.Widget> render(
     String text,
@@ -1011,6 +1287,7 @@ class ReportCancelled implements Exception {}
 
 const _gridLine = PdfColor.fromInt(0xffa9b8b2);
 const _gridOuter = PdfColor.fromInt(0xff7f918a);
+const _sectionShade = PdfColor.fromInt(0xfff3f7f2);
 
 class ReportExporter {
   bool cancelled = false;
@@ -1021,12 +1298,17 @@ class ReportExporter {
       await rootBundle.load('assets/fonts/Manrope.ttf'),
     );
     final renderer = UrduPdfRenderer(latinFont: latinFont, rtl: report.urdu);
+    if (report.grids > 1) return _gridPdf(report, latinFont, renderer);
     final landscape = report.columns.length > 6;
     final format = landscape ? PdfPageFormat.a4.landscape : PdfPageFormat.a4;
     final available = format.width - 56;
     final width = available / report.columns.length;
     final tableRows = <pw.TableRow>[];
-    Future<pw.TableRow> row(List<String> cells, {bool header = false}) async {
+    Future<pw.TableRow> row(
+      List<String> cells, {
+      bool header = false,
+      bool section = false,
+    }) async {
       final widgets = <pw.Widget>[];
       for (final cell in (report.urdu ? cells.reversed : cells)) {
         widgets.add(
@@ -1044,6 +1326,8 @@ class ReportExporter {
         repeat: header,
         decoration: header
             ? const pw.BoxDecoration(color: PdfColor.fromInt(0xffe0efeb))
+            : section
+            ? const pw.BoxDecoration(color: _sectionShade)
             : null,
         children: widgets,
       );
@@ -1061,6 +1345,7 @@ class ReportExporter {
         tableRows.add(
           await row(
             fragments.map((p) => part < p.length ? p[part] : '').toList(),
+            section: report.sections.contains(index),
           ),
         );
       }
@@ -1138,6 +1423,195 @@ class ReportExporter {
         ],
       ),
     );
+    return doc.save();
+  }
+
+  /// How many rows one grid of a [Report.grids] page holds (A4 portrait).
+  static const gridRows = 32;
+
+  /// [Report.grids] grids side by side, like the business's paper sheets:
+  /// rows of one fixed height fill the first grid, then the next, page after
+  /// page. The last page shares its rows evenly between the grids. In Urdu
+  /// the first grid and the number column are on the right.
+  Future<Uint8List> _gridPdf(
+    Report report,
+    pw.Font latinFont,
+    UrduPdfRenderer renderer,
+  ) async {
+    const format = PdfPageFormat.a4;
+    const margin = 28.0, gap = 12.0, rowHeight = 20.0, headHeight = 22.0;
+    // 786 pt inside the margins: heading 54, space 8, grid head 22, 32 rows
+    // of 20, space 6, notes 30 and the page number 12 leave 14 to spare.
+    const headingHeight = 54.0;
+    final available = format.width - margin * 2;
+    final gridWidth = (available - gap * (report.grids - 1)) / report.grids;
+    final flex = report.flex.length == report.columns.length
+        ? report.flex
+        : List.filled(report.columns.length, 1.0);
+    final flexTotal = flex.fold(0.0, (v, f) => v + f);
+    final widths = [for (final f in flex) gridWidth * f / flexTotal];
+    final start = report.urdu
+        ? pw.Alignment.centerRight
+        : pw.Alignment.centerLeft;
+    final end = report.urdu
+        ? pw.Alignment.centerLeft
+        : pw.Alignment.centerRight;
+    // One line, scaled down when it is longer than its place.
+    Future<pw.Widget> fit(String text, double size, pw.Alignment at) async =>
+        pw.FittedBox(
+          fit: pw.BoxFit.scaleDown,
+          alignment: at,
+          child: await renderer.line(text, fontSize: size),
+        );
+    Future<pw.TableRow> row(List<String> cells, {bool head = false}) async {
+      final widgets = <pw.Widget>[];
+      for (var i = 0; i < cells.length; i++) {
+        // Names align right like the amounts, as on the paper sheet.
+        final at = head || i == 0
+            ? pw.Alignment.center
+            : pw.Alignment.centerRight;
+        widgets.add(
+          pw.Container(
+            height: head ? headHeight : rowHeight,
+            padding: const pw.EdgeInsets.symmetric(horizontal: 4),
+            alignment: at,
+            child: cells[i].isEmpty
+                ? null
+                : await fit(cells[i], head ? 9.5 : 9, at),
+          ),
+        );
+      }
+      return pw.TableRow(
+        decoration: head
+            ? const pw.BoxDecoration(color: PdfColor.fromInt(0xffe0efeb))
+            : null,
+        children: report.urdu ? widgets.reversed.toList() : widgets,
+      );
+    }
+
+    final body = <pw.TableRow>[];
+    for (var index = 0; index < report.rows.length; index++) {
+      if (cancelled) throw ReportCancelled();
+      body.add(await row(report.rows[index].map((c) => c.text).toList()));
+      progress?.call((index + 1) / report.rows.length);
+      if (index % 15 == 0) await Future<void>.delayed(Duration.zero);
+    }
+    final doc = pw.Document(
+      title: report.title,
+      author: report.business,
+      theme: pw.ThemeData.withFont(base: latinFont, bold: latinFont),
+    );
+    final perPage = gridRows * report.grids;
+    final pages = math.max(1, (body.length / perPage).ceil());
+    final blank = List.filled(report.columns.length, '');
+    for (var page = 0; page < pages; page++) {
+      final slice = body.skip(page * perPage).take(perPage).toList();
+      final last = page == pages - 1;
+      final each = last
+          ? math.max(1, (slice.length / report.grids).ceil())
+          : gridRows;
+      final tables = <pw.Widget>[];
+      for (var g = 0; g < report.grids; g++) {
+        final rows = slice.skip(g * each).take(each).toList();
+        tables.add(
+          pw.SizedBox(
+            width: gridWidth,
+            child: pw.Table(
+              border: const pw.TableBorder(
+                left: pw.BorderSide(color: _gridOuter, width: 1),
+                right: pw.BorderSide(color: _gridOuter, width: 1),
+                top: pw.BorderSide(color: _gridOuter, width: 1),
+                bottom: pw.BorderSide(color: _gridOuter, width: 1),
+                horizontalInside: pw.BorderSide(color: _gridLine, width: .75),
+                verticalInside: pw.BorderSide(color: _gridLine, width: .75),
+              ),
+              columnWidths: {
+                for (var i = 0; i < widths.length; i++)
+                  i: pw.FixedColumnWidth(
+                    widths[report.urdu ? widths.length - 1 - i : i],
+                  ),
+              },
+              children: [
+                await row(report.columns, head: true),
+                ...rows,
+                // Empty rows keep the grids of a page the same height.
+                for (var i = rows.length; i < each; i++) await row(blank),
+              ],
+            ),
+          ),
+        );
+      }
+      final top = [
+        pw.Container(
+          width: available * .58,
+          alignment: start,
+          child: await fit(report.business, 16, start),
+        ),
+        pw.Container(
+          width: available * .4,
+          alignment: end,
+          child: await fit(report.title, 13, end),
+        ),
+      ];
+      final subtitle = await fit(report.subtitle, 9, start);
+      final notes = <pw.Widget>[
+        if (last)
+          for (final note in report.notes)
+            pw.Container(
+              width: available,
+              alignment: start,
+              child: await fit(note, 9.5, start),
+            ),
+      ];
+      doc.addPage(
+        pw.Page(
+          pageFormat: format,
+          margin: const pw.EdgeInsets.all(margin),
+          build: (_) => pw.Column(
+            children: [
+              pw.SizedBox(
+                height: headingHeight,
+                child: pw.Column(
+                  children: [
+                    pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: report.urdu ? top.reversed.toList() : top,
+                    ),
+                    pw.Container(
+                      width: available,
+                      alignment: start,
+                      child: subtitle,
+                    ),
+                  ],
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: report.urdu ? tables.reversed.toList() : tables,
+              ),
+              pw.SizedBox(height: 6),
+              ...notes,
+              pw.Spacer(),
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    'Zubair Khata · PKR',
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                  pw.Text(
+                    '${page + 1} / $pages',
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return doc.save();
   }
 

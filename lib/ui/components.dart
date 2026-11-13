@@ -465,13 +465,18 @@ Future<String?> pickDate(BuildContext context, String current) async {
   return date?.toIso8601String().substring(0, 10);
 }
 
+/// Picks a party or an account. With [companiesOnly] (a purchase is bought
+/// from a company) the list starts with companies only, and a button shows
+/// every party for a supplier that was never marked as a company.
 Future<String?> pickRecord(
   BuildContext context,
   AppController app,
   String kind, {
   bool bankOnly = false,
+  bool companiesOnly = false,
 }) async {
   var query = '';
+  var onlyCompanies = companiesOnly;
   return showDialog<String>(
     context: context,
     builder: (ctx) => StatefulBuilder(
@@ -481,6 +486,7 @@ Future<String?> pickRecord(
             .where(
               (r) =>
                   (!bankOnly || r.id != 'cash') &&
+                  (!onlyCompanies || r.data['supplier'] == true) &&
                   '${r.name} ${r.data['phone'] ?? ''}'.toLowerCase().contains(
                     query.toLowerCase(),
                   ),
@@ -488,7 +494,13 @@ Future<String?> pickRecord(
             .toList();
         return AlertDialog(
           title: Text(
-            ctx.t(kind == 'party' ? 'Choose a party' : 'Choose an account'),
+            ctx.t(
+              kind != 'party'
+                  ? 'Choose an account'
+                  : onlyCompanies
+                  ? 'Choose a company'
+                  : 'Choose a party',
+            ),
           ),
           content: SizedBox(
             width: 420,
@@ -505,21 +517,37 @@ Future<String?> pickRecord(
                 ),
                 const SizedBox(height: 12),
                 Expanded(
-                  child: ListView.builder(
-                    itemCount: list.length,
-                    itemBuilder: (_, i) => ListTile(
-                      title: Text(list[i].name),
-                      subtitle: Text(
-                        '${list[i].data['phone'] ?? list[i].data['bank'] ?? ''}',
-                      ),
-                      onTap: () => Navigator.pop(ctx, list[i].id),
-                    ),
-                  ),
+                  child: list.isEmpty && onlyCompanies
+                      ? Center(
+                          child: Text(
+                            ctx.t('No company found'),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: muted),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: list.length,
+                          itemBuilder: (_, i) => ListTile(
+                            title: Text(list[i].name),
+                            subtitle: Text(
+                              '${list[i].data['phone'] ?? list[i].data['bank'] ?? ''}',
+                            ),
+                            onTap: () => Navigator.pop(ctx, list[i].id),
+                          ),
+                        ),
                 ),
               ],
             ),
           ),
           actions: [
+            if (companiesOnly)
+              TextButton(
+                key: const ValueKey('pick-show-all'),
+                onPressed: () => setState(() => onlyCompanies = !onlyCompanies),
+                child: Text(
+                  ctx.t(onlyCompanies ? 'Show all parties' : 'Companies only'),
+                ),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: Text(ctx.t('Cancel')),

@@ -7,6 +7,7 @@ import '../core/l10n.dart';
 import '../core/models.dart';
 import '../features/reports/reports.dart';
 import 'components.dart';
+import 'roznamcha_widgets.dart' show dmy, errorText;
 import 'masters.dart';
 import 'opening_balance.dart';
 import 'roznamcha_form.dart';
@@ -118,6 +119,7 @@ class _EntryComposerState extends State<EntryComposer> {
       cylinderMode = 'Acquire';
   int rateUnit = 11800, cylinderSize = 11800;
   bool customerOwned = false,
+      bulkAtCost = true,
       stockReturned = false,
       supplierPayment = false,
       supplierRefund = false,
@@ -127,22 +129,28 @@ class _EntryComposerState extends State<EntryComposer> {
       loading = true;
   Json? allocations;
   dynamic bankLines;
+  String? shareCostError;
+
+  /// The reference of the purchase a share comes from; '' for oldest stock
+  /// first (FIFO).
+  String sharePurchase = '';
   int occurredAt = DateTime.now().millisecondsSinceEpoch;
-  bool dirty = false;
   final returnedEdited = <int, bool>{};
-  Timer? debounce;
-  String get draftKey => widget.replace != null
-      ? 'edit:${widget.replace!.id}'
-      : widget.initial != null &&
-            ![
-              EntryType.sale,
-              EntryType.receipt,
-              EntryType.payment,
-              EntryType.expense,
-              EntryType.transfer,
-              EntryType.discount,
-              EntryType.adjustment,
-            ].contains(widget.initial)
+
+  /// Only a new entry keeps a draft ([AppController.composerDrafts]); a
+  /// correction or a reviewed change always starts from its own data.
+  bool get keepsDraft => widget.replace == null && widget.prefill == null;
+  String get draftKey =>
+      widget.initial != null &&
+          ![
+            EntryType.sale,
+            EntryType.receipt,
+            EntryType.payment,
+            EntryType.expense,
+            EntryType.transfer,
+            EntryType.discount,
+            EntryType.adjustment,
+          ].contains(widget.initial)
       ? 'context:${widget.initial!.name}'
       : 'new-entry';
   @override
@@ -161,6 +169,7 @@ class _EntryComposerState extends State<EntryComposer> {
       'note',
       'vehicle',
       'branch',
+      'customerNote',
       'depositCharge',
       'count',
       'fullDelta',
@@ -177,16 +186,23 @@ class _EntryComposerState extends State<EntryComposer> {
     date = widget.app.selectedDate;
     type = widget.replace?.type ?? widget.initial ?? EntryType.sale;
     party = widget.initialParty ?? '';
-    final saved =
-        widget.prefill ??
-        widget.replace?.data ??
-        await widget.app.db.draft(draftKey);
-    if (!mounted) return;
+    var draft = keepsDraft ? widget.app.composerDrafts[draftKey] : null;
+    // A draft begun for another party is not used for this one.
+    if (widget.initialParty != null && draft?['party'] != widget.initialParty) {
+      draft = null;
+    }
+    final saved = widget.prefill ?? widget.replace?.data ?? draft;
     if (saved != null &&
         (widget.initial == null ||
             saved['type'] == type.name ||
             widget.replace != null)) {
       _hydrate(saved);
+      if (identical(saved, draft)) {
+        // A draft keeps what was typed, not when: the entry goes on the
+        // page's date at the current time, never on the day it was begun.
+        date = widget.app.selectedDate;
+        occurredAt = DateTime.now().millisecondsSinceEpoch;
+      }
     }
     if (type == EntryType.transfer &&
         widget.replace == null &&
@@ -226,6 +242,8 @@ class _EntryComposerState extends State<EntryComposer> {
     target = '${data['target'] ?? ''}';
     dueDate = '${data['dueDate'] ?? ''}';
     customerOwned = data['customerOwned'] == true;
+    bulkAtCost = data['shareBulkChoice'] as bool? ?? data['bulkAtCost'] == true;
+    sharePurchase = '${data['sharePurchase'] ?? ''}';
     supplierPayment = data['supplierPayment'] == true;
     supplierRefund = data['supplierRefund'] == true;
     costKnown = data['costKnown'] == true;
@@ -261,6 +279,7 @@ class _EntryComposerState extends State<EntryComposer> {
       'directBank',
       'vehicle',
       'branch',
+      'customerNote',
       'count',
       'fullDelta',
       'emptyDelta',
@@ -291,7 +310,11 @@ class _EntryComposerState extends State<EntryComposer> {
     var full = _number('fullDelta', 0, strict: strict),
         empty = _number('emptyDelta', 0, strict: strict),
         held = _number('heldDelta', 0, strict: strict);
-    final count = _number('count', 0, strict: strict);
+    // A loss or correction is entered as the three changes; the quantity
+    // field is hidden then, so whatever it still holds is not sent.
+    final count = cylinderMode == 'Loss / correction'
+        ? 0
+        : _number('count', 0, strict: strict);
     if (type == EntryType.cylinder && cylinderMode != 'Loss / correction') {
       full = switch (cylinderMode) {
         'Acquire' => acquireFull ? count : 0,
@@ -311,8 +334,9 @@ class _EntryComposerState extends State<EntryComposer> {
         _ => 0,
       };
     }
-    return {
+    final payload = <String, dynamic>{
       'type': type.name,
+      'shareBulkChoice': bulkAtCost,
       if (form.isNotEmpty) 'form': form,
       'date': date,
       'party': party,
@@ -348,7 +372,13 @@ class _EntryComposerState extends State<EntryComposer> {
         key: _number(key, 2, strict: strict),
       for (final key in ['extraGrams', 'grams'])
         key: _number(key, 3, strict: strict),
-      for (final key in ['note', 'vehicle', 'branch', 'directBank'])
+      for (final key in [
+        'note',
+        'vehicle',
+        'branch',
+        'customerNote',
+        'directBank',
+      ])
         key: fields[key]!.text.trim(),
       'quantities': {
         for (final size in sizes) '$size': _number('q$size', 0, strict: strict),
@@ -370,29 +400,45 @@ class _EntryComposerState extends State<EntryComposer> {
             widget.app.record(sourceInvoice)?.data['quantities'] ?? {},
         'rate': widget.app.record(sourceInvoice)?.data['rate'] ?? 0,
         'extraGrams': widget.app.record(sourceInvoice)?.data['extraGrams'] ?? 0,
+        if (widget.app.record(sourceInvoice)?.data['bulkAtCost'] == true) ...{
+          'bulkAtCost': true,
+          'bulkCost': widget.app.record(sourceInvoice)?.data['bulkCost'] ?? 0,
+          if (widget.app.record(sourceInvoice)?.data['sharePurchase'] != null)
+            'sharePurchase':
+                widget.app.record(sourceInvoice)?.data['sharePurchase'],
+        },
         'cash': 0,
         'bank': 0,
         'depositCharge': 0,
       },
     };
+    shareCostError = null;
+    if (type == EntryType.sale &&
+        bulkAtCost &&
+        integer(payload['extraGrams']) > 0) {
+      payload['bulkAtCost'] = true;
+      if (sharePurchase.isNotEmpty) payload['sharePurchase'] = sharePurchase;
+      try {
+        payload['bulkCost'] = widget.app.quoteBulkCost(
+          payload,
+          replace: widget.replace,
+        );
+      } catch (e) {
+        if (strict) rethrow;
+        shareCostError = errorText(context, e);
+        payload['bulkCost'] = widget.replace?.value('bulkCost') ?? 0;
+      }
+    }
+    return payload;
   }
 
   void changed() {
-    dirty = true;
     setState(() {});
-    debounce?.cancel();
-    debounce = Timer(const Duration(milliseconds: 400), () async {
-      await widget.app.db.saveDraft(draftKey, _payload());
-    });
+    if (keepsDraft) widget.app.composerDrafts[draftKey] = _payload();
   }
 
   @override
   void dispose() {
-    debounce?.cancel();
-    if (dirty) {
-      final draft = _payload();
-      unawaited(widget.app.db.saveDraft(draftKey, draft));
-    }
     for (final c in fields.values) {
       c.dispose();
     }
@@ -496,7 +542,12 @@ class _EntryComposerState extends State<EntryComposer> {
             padding: const EdgeInsets.all(18),
           ),
           onPressed: () async {
-            final id = await pickRecord(context, widget.app, 'party');
+            final id = await pickRecord(
+              context,
+              widget.app,
+              'party',
+              companiesOnly: type == EntryType.purchase,
+            );
             if (id != null && mounted) {
               party = id;
               changed();
@@ -663,7 +714,6 @@ class _EntryComposerState extends State<EntryComposer> {
   Future<void> save(bool next) async {
     if (saving) return;
     setState(() => saving = true);
-    debounce?.cancel();
     var posted = false;
     await perform(context, () async {
       final payload = _payload(strict: true);
@@ -683,11 +733,28 @@ class _EntryComposerState extends State<EntryComposer> {
           _number('count', 0) <= 0) {
         throw const FormatException('Enter cylinder count changes');
       }
-      await widget.app.post(payload, replace: widget.replace, reason: reason);
+      // Gas is bought from a company: a purchase from a party not yet marked
+      // as one marks it, in the same change, as the Roznamcha form does.
+      final seller = type == EntryType.purchase
+          ? widget.app.record('${payload['party'] ?? ''}')
+          : null;
+      await widget.app.post(
+        payload,
+        replace: widget.replace,
+        reason: reason,
+        before: [
+          if (seller != null &&
+              seller.kind == 'party' &&
+              seller.data['supplier'] != true)
+            Change(seller.id, 'party', {
+              ...seller.data,
+              'supplier': true,
+            }, seller.version),
+        ],
+      );
       posted = true;
-      dirty = false;
       await widget.onSaved?.call();
-      await widget.app.db.deleteDraft(draftKey);
+      if (keepsDraft) widget.app.composerDrafts.remove(draftKey);
     }, success: 'Saved locally');
     if (!mounted) return;
     if (posted && !next) {
@@ -862,12 +929,52 @@ class _EntryComposerState extends State<EntryComposer> {
                   ], columns: 3),
                   const SizedBox(height: 18),
                   grid([
-                    field('rate', 'Rate per 11.8 KG'),
-                    field('extraGrams', 'Extra KG (billing only)', places: 3),
+                    if (!document.purchaseShare)
+                      field('rate', 'Rate per 11.8 KG'),
+                    field('extraGrams', 'Bulk KG', places: 3),
                   ]),
+                  if (document.extraGrams > 0)
+                    SwitchListTile(
+                      key: const ValueKey('composer-share-at-cost'),
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(context.t('Share bulk at purchase cost')),
+                      subtitle: Text(
+                        context.t(
+                          'Not our sale; the party pays our purchase price.',
+                        ),
+                      ),
+                      value: bulkAtCost,
+                      onChanged: (v) {
+                        bulkAtCost = v;
+                        changed();
+                      },
+                    ),
+                  if (document.extraGrams > 0 && bulkAtCost)
+                    KeyedSubtree(
+                      key: const ValueKey('composer-share-purchase'),
+                      child: select('Share from', sharePurchase, [
+                        ('', 'Oldest stock first (FIFO)'),
+                        for (final (p, free) in widget.app.sharePurchaseOptions(
+                          date,
+                          replace: widget.replace,
+                          selected: sharePurchase,
+                        ))
+                          (
+                            '${p.data['reference']}',
+                            '${dmy(p.date)} · ${widget.app.name(p.party)} · '
+                                '${kg(p.value('grams'))} KG '
+                                '(${context.t('free')} ${kg(free)})',
+                          ),
+                      ], (v) => sharePurchase = v),
+                    ),
+                  if (shareCostError != null)
+                    Text(
+                      shareCostError!,
+                      style: const TextStyle(color: danger),
+                    ),
                   const SizedBox(height: 10),
                   Text(
-                    context.t('Extra KG does not reduce gas stock.'),
+                    context.t('Bulk gas reduces gas stock.'),
                     style: const TextStyle(color: muted, fontSize: 12),
                   ),
                   ExpansionTile(
@@ -933,11 +1040,15 @@ class _EntryComposerState extends State<EntryComposer> {
                           children: [
                             Expanded(
                               child: Text(
-                                context.t('Extra-KG billing'),
+                                context.t(
+                                  document.bulkAtCost
+                                      ? 'Purchase share (at cost)'
+                                      : 'Extra-KG billing',
+                                ),
                                 style: const TextStyle(color: muted),
                               ),
                             ),
-                            Amount(document.bulkRevenue),
+                            Amount(document.bulkBill),
                           ],
                         ),
                       ],
@@ -1009,7 +1120,10 @@ class _EntryComposerState extends State<EntryComposer> {
                     accountSelect('From account', account, (v) => account = v),
                   ]),
                   const SizedBox(height: 16),
-                  grid([field('branch', 'Branch', text: true)]),
+                  grid([
+                    field('branch', 'Branch', text: true),
+                    field('customerNote', 'Customer annotation', text: true),
+                  ]),
                 ],
                 if (type == EntryType.expense) ...[
                   grid([

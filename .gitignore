@@ -48,3 +48,17 @@ app.*.map.json
 
 # Claude Code settings that belong to one person
 .claude/settings.local.json
+
+# Local configuration, business data and signing credentials
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.jks
+*.keystore
+*.p12
+*.pem
+key.properties

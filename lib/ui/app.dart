@@ -564,13 +564,19 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                           fontSize: 11,
                                         ),
                                       ),
-                                      if (app.pendingCount > 0)
+                                      if (app.cloudLinked &&
+                                          app.pendingCount > 0)
                                         Padding(
                                           padding:
                                               const EdgeInsetsDirectional.only(
                                                 start: 5,
                                               ),
-                                          child: Tag('${app.pendingCount}'),
+                                          child: Tag(
+                                            '${app.pendingCount}',
+                                            key: const ValueKey(
+                                              'pending-count',
+                                            ),
+                                          ),
                                         ),
                                     ],
                                   ),

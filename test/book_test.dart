@@ -97,10 +97,36 @@ void main() {
     expect(b.invoiceDue['invoice'], 0);
     balanced(b);
   });
+  test('Returning gas that never had stock cancels its wait', () {
+    final b = Book([
+      party,
+      doc('invoice', 'sale', {
+        'quantities': {'11800': 1},
+        'rate': 460000,
+      }, time: 1),
+      doc('credit', 'creditNote', {
+        'sourceInvoice': 'invoice',
+        'quantities': {'11800': 1},
+        'rate': 460000,
+        'stockReturned': true,
+      }, time: 2),
+    ]);
+    expect(b.gasGrams, 0);
+    expect(b.shortageGrams, 0);
+    expect(b.uncostedSales, isEmpty);
+    expect(b.lots, isEmpty);
+    balanced(b);
+  });
   test('Credit note stock return requires established original cost', () {
     expect(
       () => Book([
         party,
+        doc('found', 'stockAdjustment', {
+          'grams': 20000,
+          'cost': 0,
+          'costKnown': false,
+          'note': 'Found',
+        }, time: 0),
         doc('invoice', 'sale', {
           'quantities': {'11800': 1},
           'rate': 460000,
@@ -127,7 +153,7 @@ void main() {
       9000000000000,
     );
   });
-  test('Accepted fixture: extra KG is billed but excluded from stock and cylinder sales', () {
+  test('Bulk KG consumes stock with cylinders and keeps separate billing', () {
     final b = Book([
       party,
       cash,
@@ -153,9 +179,10 @@ void main() {
     expect(b.receivable('p'), 206000);
     expect(b.money('cash'), 100000);
     expect(b.money('b'), 200000);
-    expect(b.gasGrams, 8200);
-    expect(b.costOfSales, 354000);
-    expect(b.profitIncomplete, isTrue);
+    expect(b.gasGrams, 7020);
+    expect(b.costOfSales, 389400);
+    expect(b.grossProfit, 116600);
+    expect(b.profitIncomplete, isFalse);
     balanced(b);
   });
   test(
@@ -188,7 +215,7 @@ void main() {
     },
   );
   test(
-    'Later purchase reserves deficit without reporting complete earlier profit',
+    'Later purchase covers an earlier sale at its cost, on the sale\'s date',
     () {
       final b = Book([
         party,
@@ -206,9 +233,25 @@ void main() {
       expect(b.gasGrams, 8200);
       expect(b.lots.single.grams, 8200);
       expect(b.lots.single.cost, 246000);
-      expect(b.uncostedSales['sale'], 11800);
-      expect(b.profitIncomplete, isTrue);
+      expect(b.uncostedSales, isEmpty);
+      expect(b.profitIncomplete, isFalse);
+      expect(b.costOfSales, 354000);
+      expect(b.grossProfit, 460000 - 354000);
+      final cost = b.postings.where((p) => p.account == 'cogs').single;
+      expect((cost.document, cost.debit), ('sale', 354000));
+      expect(b.allocations.single.lot, 'later');
       balanced(b);
+      // Cut off before the purchase, the sale is still waiting for stock.
+      final before = Book([
+        party,
+        doc('sale', 'sale', {
+          'quantities': {'11800': 1},
+          'rate': 460000,
+          'customerOwned': true,
+        }, time: 0),
+      ]);
+      expect(before.uncostedSales['sale'], 11800);
+      expect(before.profitIncomplete, isTrue);
     },
   );
   test('Backdated lot resolves shortage deterministically', () {
@@ -251,7 +294,7 @@ void main() {
     ]);
     expect(b.money('cash'), 800000);
     expect(b.money('b'), 150000);
-    expect(b.expenseTotal, 50000);
+    expect(b.balance('expense:Office'), 50000);
     balanced(b);
   });
   test('Supplier advances, purchases and refunds retain independent customer balance', () {

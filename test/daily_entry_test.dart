@@ -542,43 +542,51 @@ void main() {
     await finish(tester, app, db);
   });
 
-  testWidgets('Company ko payment asks for no customer, only the branch', (
-    tester,
-  ) async {
-    final (app, db) = await start(tester);
-    await app.saveMaster('party', {
-      'name': 'Pyramid',
-      'customer': false,
-      'supplier': true,
-    }, supplierOpening: 205960200);
-    final pyramid = app.partyByName('Pyramid')!.id;
-    await pumpForm(tester, app);
-    await tester.tap(tab('kharcha'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Cash kharcha'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Company ko payment').last);
-    await tester.pumpAndSettle();
-    // "Customer (kis ke liye)" was only a note and is gone from the form.
-    expect(find.text('Customer (kis ke liye)'), findsNothing);
-    expect(find.byKey(const ValueKey('roz-customerNote')), findsNothing);
-    await tester.enterText(field('party'), 'Pyramid');
-    await tester.enterText(field('branch'), 'UBL');
-    await tester.enterText(field('amount'), '1618000');
-    await tester.pump();
-    expect(
-      find.text('Baqaya: Dena 2,059,602  →  Dena 441,602'),
-      findsOneWidget,
-    );
-    await tester.tap(save);
-    await tester.pumpAndSettle();
-    final payment = app.book.documents.last;
-    expect(payment.party, pyramid);
-    expect(rozFormOf(payment), RozForm.companyPay);
-    expect(payment.data['branch'], 'UBL');
-    expect(payment.data.containsKey('customerNote'), isFalse);
-    expect(app.book.payable(pyramid), 44160200);
-    expect(app.book.money('cash'), -161800000);
-    await finish(tester, app, db);
-  });
+  testWidgets(
+    'Company ko payment keeps Customer (kis ke liye) and the branch',
+    (tester) async {
+      final (app, db) = await start(tester);
+      await app.saveMaster('party', {
+        'name': 'Pyramid',
+        'customer': false,
+        'supplier': true,
+      }, supplierOpening: 205960200);
+      final pyramid = app.partyByName('Pyramid')!.id;
+      await pumpForm(tester, app);
+      await tester.tap(tab('kharcha'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cash kharcha'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Company ko payment').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Customer (kis ke liye)'), findsOneWidget);
+      await tester.enterText(field('party'), 'Pyramid');
+      await tester.enterText(field('customerNote'), 'Ali Traders');
+      await tester.enterText(field('branch'), 'UBL');
+      await tester.enterText(field('amount'), '1618000');
+      await tester.pump();
+      expect(
+        find.text('Baqaya: Dena 2,059,602  →  Dena 441,602'),
+        findsOneWidget,
+      );
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      final payment = app.book.documents.last;
+      expect(payment.party, pyramid);
+      expect(rozFormOf(payment), RozForm.companyPay);
+      expect(payment.data['customerNote'], 'Ali Traders');
+      expect(payment.data['branch'], 'UBL');
+      // The customer is a note: only the company's khata and the cash move.
+      expect(app.book.payable(pyramid), 44160200);
+      expect(app.book.money('cash'), -161800000);
+      // Editing the entry brings both back into the form.
+      tester
+          .state<RoznamchaFormState>(find.byType(RoznamchaForm))
+          .edit(payment);
+      await tester.pumpAndSettle();
+      expect(text(tester, 'customerNote'), 'Ali Traders');
+      expect(text(tester, 'branch'), 'UBL');
+      await finish(tester, app, db);
+    },
+  );
 }

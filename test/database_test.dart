@@ -133,7 +133,7 @@ void main() {
       'party': p,
       'cash': 10000,
     });
-    await app.startBatch(); // snapshot record + batch:<date> metadata
+    await app.startBatch(); // a snapshot that carries the Khata Saaf time
     await app.commit([
       Change('business', 'settings', {
         'name': 'Ali Gas',
@@ -142,7 +142,16 @@ void main() {
         'defaultRate': 460000,
       }, 1),
     ]);
-    await db.saveDraft('composer', {'amount': '5'});
+    app.composerDrafts['context:purchase'] = {'amount': '5'};
+    // What an older version kept on the device: a Khata Saaf in metadata
+    // and composer drafts in their own table.
+    await db.setMeta('batch:2026-01-01', '1767225600000');
+    await db.customStatement(
+      'CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, data TEXT NOT NULL)',
+    );
+    await db.customStatement(
+      "INSERT INTO drafts VALUES ('composer', '{\"amount\":\"5\"}')",
+    );
     await db.setMeta('pre_restore', '{"old":"copy"}');
     await db.setMeta('cursor', '7');
     await db.setMeta('epoch', 'old-epoch');
@@ -165,7 +174,12 @@ void main() {
     expect(app.batchStarts, isEmpty);
     expect(app.rozDrafts, isEmpty);
     expect(app.selectedDate, businessDate());
-    expect(await db.draft('composer'), null);
+    expect(app.composerDrafts, isEmpty);
+    expect(app.preRestoreSaved, isFalse);
+    final oldDrafts = await db
+        .customSelect('SELECT COUNT(*) AS n FROM drafts')
+        .getSingle();
+    expect(oldDrafts.read<int>('n'), 0);
     final future = await db
         .customSelect('SELECT COUNT(*) AS n FROM future_data')
         .getSingle();

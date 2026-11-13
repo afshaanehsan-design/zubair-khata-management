@@ -3,6 +3,7 @@
 // ("BOTTOM OVERFLOWED BY …" stripes). Each problem is reported once with the
 // source line that caused it and every screen/size where it shows up.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/native.dart';
@@ -68,10 +69,27 @@ Future<void> seed(AppController app) async {
   await app.post({
     'type': 'purchase',
     'date': date,
+    'occurredAt': 0,
     'party': pso,
     'grams': 1000000,
     'rate': 30000,
     'rateUnit': 1000,
+  });
+  await app.post({
+    'type': 'sale',
+    'date': date,
+    'occurredAt': 1,
+    'party': abdul,
+    'quantities': <String, int>{},
+    'extraGrams': 10000,
+    'bulkAtCost': true,
+    // Taken from the purchase above, so the "Share from" picker and the
+    // supplier on the entry are laid out too.
+    'sharePurchase': app.book.documents
+        .lastWhere((d) => d.type == EntryType.purchase)
+        .reference,
+    'cash': 12345,
+    'note': 'Shared purchase at original FIFO cost',
   });
   await app.post({
     'type': 'sale',
@@ -115,7 +133,7 @@ Future<void> seed(AppController app) async {
       .partyByName('Muhammad Abdul Rehman Traders and Sons Gas Agency')!
       .id;
   final firstSale = app.book.documents.firstWhere(
-    (d) => d.type == EntryType.sale,
+    (d) => d.type == EntryType.sale && !d.purchaseShare,
   );
   await app.post({
     'type': 'sale',
@@ -219,6 +237,9 @@ Future<void> seed(AppController app) async {
   ]) {
     await app.post({'date': date, ...entry});
   }
+  // Settings then also offers the backup made before a restore.
+  await app.db.setMeta('pre_restore', jsonEncode(await app.backup()));
+  await app.reload();
 }
 
 void main() {
@@ -477,6 +498,19 @@ void main() {
             await dialog(
               '$tag · Correct sale',
               (c) => unawaited(composeEntry(c, app, replace: sale)),
+            );
+            // A share from a chosen purchase: switch, "Share from" picker
+            // with the purchase's long label, in both entry forms.
+            final share = app.book.documents.firstWhere(
+              (d) => d.sharePurchase.isNotEmpty,
+            );
+            await dialog(
+              '$tag · Correct purchase share (composer)',
+              (c) => unawaited(composeEntry(c, app, replace: share)),
+            );
+            await dialog(
+              '$tag · Correct purchase share (daily form)',
+              (c) => unawaited(openRoznamchaForm(c, app, replace: share)),
             );
             app.go('roznamcha');
             await check('$tag · Roznamcha page (after correcting a sale)');

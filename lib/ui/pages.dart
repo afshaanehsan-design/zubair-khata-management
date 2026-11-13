@@ -178,6 +178,33 @@ class _ActivityPageState extends State<ActivityPage> {
   }
 }
 
+/// The parties the Parties page lists for a filter chip and the Archived
+/// switch, matching the top-bar search by name or phone. Records keep the
+/// order they were first saved in (KhataDatabase), so the reversed list is
+/// newest first. The pending balances PDF prints this same list.
+List<Record> visibleParties(AppController app, String filter, bool archived) {
+  final b = app.book, search = app.search.toLowerCase();
+  return app
+      .ofKind('party', archived: archived)
+      .where(
+        (p) =>
+            '${p.name} ${p.data['phone'] ?? ''}'.toLowerCase().contains(
+              search,
+            ) &&
+            switch (filter) {
+              'Customers' => p.data['customer'] == true,
+              'Companies' => p.data['supplier'] == true,
+              'Udhari' => p.data['udhari'] == true,
+              'You will receive' => partyOwed(b, p.id).receive > 0,
+              'You will pay' => partyOwed(b, p.id).pay > 0,
+              _ => true,
+            },
+      )
+      .toList()
+      .reversed
+      .toList();
+}
+
 /// Parties, newest first. On a wide screen the left column (heading, filters
 /// and list) and the chosen party's full-height details on the right each
 /// scroll on their own; on a narrower screen the whole page scrolls and a tap
@@ -204,35 +231,39 @@ class _PartiesPageState extends State<PartiesPage> {
   /// filtered out, archived or deleted) the newest party is shown.
   String? selected;
 
+  /// Pending balances of exactly the parties the list shows.
+  Future<void> _pending(List<Record> list) async {
+    final app = widget.app;
+    final report = pendingReport(
+      app,
+      list,
+      filter: filter,
+      archived: archived,
+      search: app.search,
+      urdu: app.urdu,
+    );
+    if (report.rows.isEmpty) {
+      showMessage(context, context.t('No pending balances'));
+      return;
+    }
+    await previewReport(context, report);
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = widget.app, b = app.book;
-    // Records keep the order they were first saved in (KhataDatabase), so the
-    // reversed list is newest first.
-    final list = app
-        .ofKind('party', archived: archived)
-        .where(
-          (p) =>
-              '${p.name} ${p.data['phone'] ?? ''}'.toLowerCase().contains(
-                app.search.toLowerCase(),
-              ) &&
-              switch (filter) {
-                'Customers' => p.data['customer'] == true,
-                'Companies' => p.data['supplier'] == true,
-                'Udhari' => p.data['udhari'] == true,
-                'You will receive' => partyOwed(b, p.id).receive > 0,
-                'You will pay' => partyOwed(b, p.id).pay > 0,
-                _ => true,
-              },
-        )
-        .toList()
-        .reversed
-        .toList();
+    final list = visibleParties(app, filter, archived);
     final header = [
       PageHeading(
         'Parties',
         'Newest first',
         actions: [
+          OutlinedButton.icon(
+            key: const ValueKey('parties-pending'),
+            onPressed: () => _pending(list),
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            label: Text(context.t('Pending balances')),
+          ),
           FilledButton.icon(
             onPressed: () => editMaster(context, app, 'party'),
             icon: const Icon(Icons.add),

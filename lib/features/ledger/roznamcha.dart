@@ -147,6 +147,7 @@ class RoznamchaDay {
   int udharCash = 0;
   int lessDiscount = 0, lessBank = 0;
   int bill = 0, cylinderBill = 0, bulkGrams = 0, cylinderGrams = 0;
+  int shareAmount = 0, sharedGrams = 0;
   int gasIn = 0, gasOut = 0;
   final Map<int, int> cylinders = {for (final s in sizes) s: 0};
 
@@ -166,6 +167,8 @@ class RoznamchaDay {
   int get bankNet => bankIn - bankOut;
   int get lessTotal => lessDiscount + lessBank;
   int get bulkBill => bill - cylinderBill;
+  int get dispatchGrams => cylinderGrams + bulkGrams;
+  int get totalBilled => bill + shareAmount;
   int get count => documents.length;
 
   void _out(Document d, int amount, {RozForm? form}) {
@@ -199,11 +202,13 @@ class RoznamchaDay {
     final amount = d.value('amount');
     switch (d.type) {
       case EntryType.sale:
-        bill += d.bill;
+        bill += d.cylinderRevenue + d.bulkRevenue;
+        shareAmount += d.shareCharge;
+        if (d.bulkAtCost) sharedGrams += d.extraGrams;
         cylinderBill += d.cylinderRevenue;
         bulkGrams += d.extraGrams;
         cylinderGrams += d.cylinderGrams;
-        gasOut += d.cylinderGrams;
+        gasOut += d.saleGrams;
         for (final s in sizes) {
           cylinders[s] =
               cylinders[s]! + integer((d.data['quantities'] as Map?)?['$s']);
@@ -220,7 +225,7 @@ class RoznamchaDay {
       case EntryType.historicalSale:
         gasOut += d.value('grams');
       case EntryType.creditNote:
-        if (d.data['stockReturned'] == true) gasIn += d.cylinderGrams;
+        if (d.data['stockReturned'] == true) gasIn += d.saleGrams;
       default:
         break;
     }

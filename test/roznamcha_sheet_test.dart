@@ -142,6 +142,9 @@ void main() {
       'A: KUL AAMAD',
       'B: KHARCHA + BANK JAMA',
       'SAFI BAQAYA',
+      // Added after the history print's four, as on the Roznamcha page.
+      'TOTAL GAS DISPATCH (KG)',
+      'CALCULATED BILL',
     ]);
     expect(cells(sheet.summary.body), [
       [
@@ -149,6 +152,9 @@ void main() {
         'Rs. 3,213,690 Cash 260,000 | Bank 293,000',
         'Rs. 303,300 Kharcha 10,300 | Bank Jama 293,000',
         'Rs. 2,910,390 Bank Baqi 293,000',
+        // No gas sold that day: still printed, at 0.
+        '0 kg 11.8 KG: 0 | 15 KG: 0 | 45 KG: 0',
+        'Rs. 0 Cylinder 0 | Bulk 0',
       ],
     ]);
     // "Rs. X" in bold, its note in the smaller type.
@@ -349,6 +355,9 @@ void main() {
         'Rs. 120,000 Cash 10,000 | Bank 5,000 | Direct 3,000',
         'Rs. 28,000 Kharcha 16,000 | Bank Jama 9,000 | Direct 3,000',
         'Rs. 92,000 Bank Baqi 7,700',
+        // 2 x 11.8 kg + 1 x 45 kg + 5 kg bulk at Rs 4,640 per 11.8 kg.
+        '73.6 kg 11.8 KG: 2 | 15 KG: 0 | 45 KG: 1 | Bulk 5 kg',
+        'Rs. 28,941 Cylinder 26,975 | Bulk 1,966',
       ],
     ]);
     expect(app.bookAt(date).money('cash'), rs(92000));
@@ -473,10 +482,87 @@ void main() {
     expect(urdu.heading, matches(script));
     // The Urdu sheet reads right to left, and so does its arrow.
     expect(urdu.tables[2].body[4][4].text, endsWith('Umer ← Zubair'));
+    // The gas box mixes Latin sizes with Urdu "Bulk": every part is isolated,
+    // so "73.6 kg" is not moved beside "45 KG:".
+    String ltr(String s) =>
+        '${String.fromCharCode(0x2066)}$s'
+        '${String.fromCharCode(0x2069)}';
+    String rtl(String s) =>
+        '${String.fromCharCode(0x2067)}$s'
+        '${String.fromCharCode(0x2069)}';
+    expect(
+      urdu.summary.body.single[4].text,
+      '${ltr('73.6 kg')} ${ltr('11.8 KG: 2')} | ${ltr('15 KG: 0')} | '
+      '${ltr('45 KG: 1')} | ${rtl('${Words(true)('Bulk')} 5 kg')}',
+    );
 
     app.dispose();
     await db.close();
   });
+
+  test(
+    'Gas dispatch and Calculated Bill print what the Roznamcha page shows',
+    () async {
+      final (app, db) = await start();
+      const date = '2026-11-02';
+      final ju = await party(app, 'JU Gas', company: true);
+      final ali = await party(app, 'Ali');
+      final sadiq = await party(app, 'Sadiq');
+      await app.post({
+        'date': '2026-11-01',
+        'type': 'adjustment',
+        'target': 'money:cash',
+        'amount': rs(100000),
+        'note': 'Opening',
+        'occurredAt': 0,
+        'form': 'opening',
+      });
+      var at = 1;
+      Future<void> post(Json data) =>
+          app.post({'date': date, 'occurredAt': at++, ...data});
+      await post({
+        'type': 'purchase',
+        'party': ju,
+        'grams': 118000,
+        'rate': rs(5720),
+        'rateUnit': 11800,
+        'account': 'cash',
+      });
+      await post({
+        'type': 'sale',
+        'party': ali,
+        'quantities': {'11800': 1},
+        'customerOwned': true,
+        'rate': rs(5770),
+      });
+      // A purchase share: its KG are dispatched, its charge is not in the
+      // Calculated Bill (the screen's card leaves it out too).
+      await post({
+        'type': 'sale',
+        'party': sadiq,
+        'quantities': <String, int>{},
+        'extraGrams': 11800,
+        'bulkAtCost': true,
+      });
+
+      app.setDate(date);
+      final sheet = buildReport(
+        app,
+        'Daily roznamcha',
+        date,
+        date,
+      ).sheets.single;
+      expect(cells(sheet.summary.body).single.skip(4), [
+        '23.6 kg 11.8 KG: 1 | 15 KG: 0 | 45 KG: 0 | Bulk 11.8 kg',
+        'Rs. 5,770 Cylinder 5,770 | Bulk 0',
+      ]);
+      // The share's charge is still on the sheet, in A's Bill total.
+      expect(sheet.tables.first.foot.single[5].text, '11,490');
+
+      app.dispose();
+      await db.close();
+    },
+  );
 
   test(
     'A live print says when the day was saved only while it matches',
@@ -568,8 +654,11 @@ void main() {
         cells(sheet.summary.body).single.first,
         'Rs. 2,910,390 Bank Nikali 0',
       );
-      // Other reports have no sheets: their PDF stays the table.
-      expect(buildReport(app, 'Cash book', day, day).sheets, isEmpty);
+      // Other reports print in the same design, one sheet each, without the
+      // Roznamcha's Compact switch.
+      final cashBook = buildReport(app, 'Cash book', day, day);
+      expect(cashBook.sheets, hasLength(1));
+      expect(cashBook.roznamchaSheets, isNull);
       app.dispose();
       await db.close();
     },
@@ -577,11 +666,19 @@ void main() {
 
   test('Every label of the sheet has an Urdu translation', () {
     final missing = <String>{};
-    final source = File('lib/features/reports/roznamcha_sheet.dart')
-        .readAsStringSync();
-    for (final match in RegExp(r"\bt\('([^'\$\r\n]+)'\)").allMatches(source)) {
-      final key = match.group(1)!;
-      if (!Words.hasUrdu(key)) missing.add(key);
+    // The Roznamcha sheet and every other report printed in its design.
+    for (final file in [
+      'roznamcha_sheet.dart',
+      'report_sheet.dart',
+      'reports.dart',
+    ]) {
+      final source = File('lib/features/reports/$file').readAsStringSync();
+      for (final match in RegExp(
+        r"\bt\('([^'\$\r\n]+)'\)",
+      ).allMatches(source)) {
+        final key = match.group(1)!;
+        if (!Words.hasUrdu(key)) missing.add('$file: $key');
+      }
     }
     expect(missing, isEmpty);
   });

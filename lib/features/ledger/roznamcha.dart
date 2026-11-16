@@ -31,6 +31,17 @@ enum RozForm {
 bool isOpeningBalance(Document d) =>
     d.type == EntryType.adjustment && integer(d.data['occurredAt']) == 0;
 
+/// What an adjustment is called: an opening balance, a later correction of
+/// cash in hand with no party ("Cash kam" for cash lost or taken out of the
+/// khata, "Cash zyada" for cash added), or any other balance correction.
+String adjustmentLabel(Document d) => isOpeningBalance(d)
+    ? 'Opening balance'
+    : d.data['target'] != 'money:cash'
+    ? 'Adjustment'
+    : d.value('amount') < 0
+    ? 'Cash kam'
+    : 'Cash zyada';
+
 /// The note shown on a Roznamcha row. The default note of an opening
 /// balance only repeats its label, so it is left out.
 String rozNote(Document d) =>

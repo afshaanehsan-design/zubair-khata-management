@@ -500,6 +500,22 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                         size: 21,
                                         color: muted,
                                       ),
+                                      suffixIcon: searchField.text.isEmpty
+                                          ? null
+                                          : IconButton(
+                                              tooltip: context.t(
+                                                'Clear search',
+                                              ),
+                                              icon: const Icon(
+                                                Icons.close_rounded,
+                                                size: 19,
+                                                color: muted,
+                                              ),
+                                              onPressed: () {
+                                                searchField.clear();
+                                                app.setSearch('');
+                                              },
+                                            ),
                                       hintText: context.t(
                                         'Search transactions, parties…',
                                       ),

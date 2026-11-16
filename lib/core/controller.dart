@@ -15,6 +15,18 @@ import 'organizations.dart';
 
 const uuid = Uuid();
 
+/// How Pending balances arranges its parties: by name A to Z, the biggest
+/// balance first, or newest first like the Parties page's list.
+enum PendingOrder {
+  name('A to Z'),
+  balance('Biggest balance first'),
+  newest('Newest first');
+
+  /// The English label, also the translation key.
+  final String label;
+  const PendingOrder(this.label);
+}
+
 class AppController extends ChangeNotifier {
   final KhataDatabase db;
 
@@ -49,6 +61,17 @@ class AppController extends ChangeNotifier {
 
   /// Aamad table grouping ("Customer wise") like the original page.
   bool rozCustomerWise = false;
+
+  /// How the Pending balances sheets arrange their parties (the Parties
+  /// page's Pending balances menu). A view setting like [page], not business
+  /// data, so a reset leaves it alone.
+  PendingOrder pendingOrder = PendingOrder.name;
+
+  /// The PDF preview's size slider, in percent, by [Report.kind]. Saved in
+  /// this organization's metadata (`pdf_sizes`), so it is remembered on this
+  /// device until a reset. See [pdfSize].
+  final pdfSizes = <String, int>{};
+  static const pdfSizeMin = 50, pdfSizeMax = 150, pdfSizeStep = 5;
   String device = '';
   String? owner;
   String? lastError;
@@ -167,6 +190,7 @@ class AppController extends ChangeNotifier {
     if (shared != null) await db.setMeta('language', language);
     organizations?.setLanguage(language);
     if (await db.meta('initialized') == null) await _seedDefaults();
+    await _loadPdfSizes();
     await reload();
     const envUrl = String.fromEnvironment('SUPABASE_URL');
     const envKey = String.fromEnvironment('SUPABASE_ANON_KEY');
@@ -277,6 +301,41 @@ class AppController extends ChangeNotifier {
     _quoteKey = null;
     organizations?.mirror(this);
     notifyListeners();
+  }
+
+  /// The size, in percent, the PDF of a report of this [kind] last printed at
+  /// (100 until the slider is moved).
+  int pdfSize(String kind) => pdfSizes[kind] ?? 100;
+
+  /// Remembers the size slider for reports of this [kind]: [percent] is
+  /// rounded to the slider's 5% steps and kept between 50% and 150%.
+  Future<void> setPdfSize(String kind, int percent) async {
+    final value =
+        ((percent.clamp(pdfSizeMin, pdfSizeMax) / pdfSizeStep).round() *
+                pdfSizeStep)
+            .toInt();
+    if (value == 100) {
+      if (pdfSizes.remove(kind) == null) return;
+    } else {
+      if (pdfSizes[kind] == value) return;
+      pdfSizes[kind] = value;
+    }
+    await db.setMeta('pdf_sizes', jsonEncode(pdfSizes));
+  }
+
+  Future<void> _loadPdfSizes() async {
+    pdfSizes.clear();
+    try {
+      final saved = jsonDecode(await db.meta('pdf_sizes') ?? '{}');
+      if (saved is! Map) return;
+      for (final MapEntry(:key, :value) in saved.entries) {
+        if (value is int && value >= pdfSizeMin && value <= pdfSizeMax) {
+          pdfSizes['$key'] = value;
+        }
+      }
+    } catch (_) {
+      // A damaged value only loses the remembered sizes.
+    }
   }
 
   Future<void> setLanguage(String code) async {
@@ -1039,6 +1098,8 @@ class AppController extends ChangeNotifier {
     } catch (_) {}
     rozDrafts.clear();
     composerDrafts.clear();
+    // Its metadata key went with the wipe.
+    pdfSizes.clear();
     selectedDate = businessDate();
     lastError = null;
     await reload();
@@ -1150,6 +1211,8 @@ class AppController extends ChangeNotifier {
       await db.restoreLocal(data);
       await db.setMeta('device', device);
       owner = meta['owner'] as String?;
+      // The metadata, the PDF sizes among it, is now the backup's.
+      await _loadPdfSizes();
     }
     await db.setMeta('pre_restore', jsonEncode(recovery));
     await reload();

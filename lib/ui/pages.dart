@@ -219,6 +219,9 @@ class PartiesPage extends StatefulWidget {
 
   /// The party list beside the details (for tests).
   static const listKey = Key('parties-list-rows');
+
+  /// The listed parties' totals beside the heading (for tests).
+  static const totalsKey = Key('parties-totals');
   @override
   State<PartiesPage> createState() => _PartiesPageState();
 }
@@ -231,8 +234,76 @@ class _PartiesPageState extends State<PartiesPage> {
   /// filtered out, archived or deleted) the newest party is shown.
   String? selected;
 
-  /// Pending balances of exactly the parties the list shows.
-  Future<void> _pending(List<Record> list) async {
+  /// The Pending balances button's two sheets, in a menu under [button]:
+  /// every pending balance, or only those the top bar's day changed. Under
+  /// them, Arrange: exactly one of A to Z (the default), Biggest balance
+  /// first and Newest first is ticked ([AppController.pendingOrder]);
+  /// choosing another ticks it and opens the menu again.
+  Future<void> _pendingMenu(BuildContext button, List<Record> list) async {
+    final app = widget.app, day = app.selectedDate;
+    final box = button.findRenderObject()! as RenderBox;
+    final overlay =
+        Overlay.of(button).context.findRenderObject()! as RenderBox;
+    while (true) {
+      if (!mounted || !button.mounted) return;
+      final choice = await showMenu<String>(
+        context: button,
+        position: RelativeRect.fromRect(
+          Rect.fromPoints(
+            box.localToGlobal(
+              box.size.bottomLeft(const Offset(0, 4)),
+              ancestor: overlay,
+            ),
+            box.localToGlobal(
+              box.size.bottomRight(const Offset(0, 4)),
+              ancestor: overlay,
+            ),
+          ),
+          Offset.zero & overlay.size,
+        ),
+        items: [
+          PopupMenuItem(
+            key: const ValueKey('parties-pending-all'),
+            value: 'all',
+            child: Text('${context.t('All pending balances')} · $day'),
+          ),
+          PopupMenuItem(
+            key: const ValueKey('parties-pending-day'),
+            value: 'day',
+            child: Text('${context.t('Changed on this day only')} · $day'),
+          ),
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            enabled: false,
+            height: 32,
+            child: Text(
+              context.t('Arrange'),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          for (final order in PendingOrder.values)
+            CheckedPopupMenuItem(
+              key: ValueKey('parties-pending-order-${order.name}'),
+              value: 'order:${order.name}',
+              checked: app.pendingOrder == order,
+              child: Text(context.t(order.label)),
+            ),
+        ],
+      );
+      if (choice == null || !mounted) return;
+      if (choice.startsWith('order:')) {
+        app.pendingOrder = PendingOrder.values.byName(choice.substring(6));
+        continue;
+      }
+      await _pending(list, day: choice == 'day' ? day : null);
+      return;
+    }
+  }
+
+  /// Pending balances of exactly the parties the list shows, at the end of
+  /// the top bar's date: all of them (shading those whose balance changed on
+  /// it), or with [day] (that date) only those.
+  Future<void> _pending(List<Record> list, {String? day}) async {
     final app = widget.app;
     final report = pendingReport(
       app,
@@ -241,9 +312,19 @@ class _PartiesPageState extends State<PartiesPage> {
       archived: archived,
       search: app.search,
       urdu: app.urdu,
+      day: day,
+      asOf: day == null ? app.selectedDate : null,
+      order: app.pendingOrder,
     );
     if (report.rows.isEmpty) {
-      showMessage(context, context.t('No pending balances'));
+      showMessage(
+        context,
+        context.t(
+          day == null
+              ? 'No pending balances'
+              : 'No pending balance changed on this day',
+        ),
+      );
       return;
     }
     await previewReport(context, report);
@@ -257,12 +338,17 @@ class _PartiesPageState extends State<PartiesPage> {
       PageHeading(
         'Parties',
         'Newest first',
+        count: list.length,
+        beside: _totals(list, b),
         actions: [
-          OutlinedButton.icon(
-            key: const ValueKey('parties-pending'),
-            onPressed: () => _pending(list),
-            icon: const Icon(Icons.picture_as_pdf_outlined),
-            label: Text(context.t('Pending balances')),
+          // The complete sheet, or only the day's changes.
+          Builder(
+            builder: (button) => OutlinedButton.icon(
+              key: const ValueKey('parties-pending'),
+              onPressed: () => _pendingMenu(button, list),
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: Text(context.t('Pending balances')),
+            ),
           ),
           FilledButton.icon(
             onPressed: () => editMaster(context, app, 'party'),
@@ -399,6 +485,57 @@ class _PartiesPageState extends State<PartiesPage> {
     );
   }
 
+  /// An amount over what it is, on the far side: a party's in its row, the
+  /// listed parties' in the heading.
+  Widget _amount(int value, String label, Color color, {double size = 14}) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              'Rs ${money(value)}',
+              textDirection: TextDirection.ltr,
+              style: TextStyle(
+                fontSize: size,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+            ),
+          ),
+          Text(
+            context.t(label),
+            textAlign: TextAlign.end,
+            style: const TextStyle(fontSize: 10.5, color: muted),
+          ),
+        ],
+      );
+
+  /// What the listed parties owe you and what you owe them in all: the sums
+  /// of the rows' own figures, so they follow the filter and the search.
+  Widget _totals(List<Record> list, Book b) {
+    var receive = 0, pay = 0;
+    for (final p in list) {
+      final owed = partyOwed(b, p.id);
+      receive += owed.receive;
+      pay += owed.pay;
+    }
+    return ConstrainedBox(
+      key: PartiesPage.totalsKey,
+      constraints: const BoxConstraints(maxWidth: 170),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _amount(receive, 'You will receive', ink, size: 16),
+          const SizedBox(height: 4),
+          _amount(pay, 'You will pay', danger, size: 16),
+        ],
+      ),
+    );
+  }
+
   /// One party in the list: name, phone and kind, and on the far side what
   /// it owes you and what you owe it (or "Settled").
   Widget _partyRow(
@@ -416,26 +553,6 @@ class _PartiesPageState extends State<PartiesPage> {
       if (p.data['udhari'] == true) context.t('Udhari'),
       if (p.archived) context.t('Archived'),
     ];
-    Widget amount(int value, String label, Color color) => Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          'Rs ${money(value)}',
-          textDirection: TextDirection.ltr,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: color,
-          ),
-        ),
-        Text(
-          context.t(label),
-          textAlign: TextAlign.end,
-          style: const TextStyle(fontSize: 10.5, color: muted),
-        ),
-      ],
-    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Material(
@@ -493,10 +610,12 @@ class _PartiesPageState extends State<PartiesPage> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (receive == 0 && pay == 0) amount(0, 'Settled', muted),
-                      if (receive > 0) amount(receive, 'You will receive', ink),
+                      if (receive == 0 && pay == 0)
+                        _amount(0, 'Settled', muted),
+                      if (receive > 0)
+                        _amount(receive, 'You will receive', ink),
                       if (receive > 0 && pay > 0) const SizedBox(height: 4),
-                      if (pay > 0) amount(pay, 'You will pay', danger),
+                      if (pay > 0) _amount(pay, 'You will pay', danger),
                     ],
                   ),
                 ),
@@ -541,6 +660,13 @@ class _MoneyPageState extends State<MoneyPage> {
       ),
     );
   }
+
+  /// Cash, every bank, Total bank and Total at the end of the chosen day,
+  /// printed like the Roznamcha.
+  Future<void> moneyStatement() => previewReport(
+    context,
+    moneyReport(app, app.selectedDate, urdu: app.urdu),
+  );
 
   Future<void> transfer() async {
     if (app.ofKind('account').where((a) => a.id != 'cash').length < 2) {
@@ -600,6 +726,7 @@ class _MoneyPageState extends State<MoneyPage> {
     final today = date == businessDate();
     final b = app.bookAt(date);
     final accounts = app.ofKind('account');
+    final banks = accounts.where((a) => a.id != 'cash').length;
     final archived = app
         .ofKind('account', archived: true)
         .where((a) => a.archived)
@@ -611,6 +738,12 @@ class _MoneyPageState extends State<MoneyPage> {
           'Money',
           'Cash book',
           actions: [
+            OutlinedButton.icon(
+              key: const ValueKey('money-statement'),
+              onPressed: moneyStatement,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: Text(context.t('Statement')),
+            ),
             FilledButton.icon(
               onPressed: () => editMaster(context, app, 'account'),
               icon: const Icon(Icons.add),
@@ -629,7 +762,7 @@ class _MoneyPageState extends State<MoneyPage> {
             ),
           ),
         MetricGrid([
-          for (final a in accounts)
+          for (final a in accounts) ...[
             Metric(
               a.name,
               'Rs ${money(b.money(a.id))}',
@@ -640,6 +773,19 @@ class _MoneyPageState extends State<MoneyPage> {
               detail: a.data['bank'] as String?,
               onTap: () => statement(a),
             ),
+            // All the banks together, right after Cash.
+            if (a.id == 'cash')
+              Metric(
+                'Total bank',
+                'Rs ${money(b.bankMoney)}',
+                Icons.account_balance_wallet_outlined,
+                key: const ValueKey('money-total-bank'),
+                detail: context
+                    .t('Banks: {count}')
+                    .replaceAll('{count}', '$banks'),
+                onTap: moneyStatement,
+              ),
+          ],
         ]),
         const SizedBox(height: 24),
         Wrap(

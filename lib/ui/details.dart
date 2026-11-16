@@ -11,7 +11,7 @@ import 'entry_composer.dart';
 import 'export_ui.dart';
 import 'masters.dart';
 import 'roznamcha_form.dart';
-import 'roznamcha_widgets.dart' show confirmPlain;
+import 'roznamcha_widgets.dart' show confirmDelete, confirmPlain;
 
 /// One entry in a list: who, what it contains, how much, and whether it is
 /// paid. The same row is used on the Activity page, in the party dialog and in
@@ -603,36 +603,24 @@ Future<void> showTransaction(
             ),
             if (!d.voided)
               TextButton(
+                // Deleting voids the entry. The ledger is replayed without
+                // it, so any gas it took goes back to its FIFO lots by
+                // itself; there is nothing to choose.
                 onPressed: () async {
-                  if (d.type == EntryType.sale) {
-                    await composeEntry(
-                      ctx,
-                      app,
-                      type: EntryType.creditNote,
-                      party: d.party,
-                      prefill: {
-                        'type': 'creditNote',
-                        'date': app.selectedDate,
-                        'party': d.party,
-                        'sourceInvoice': d.id,
-                        'stockReturned': false,
-                      },
-                    );
-                    return;
-                  }
-                  final reason = await askText(ctx, 'Reason for correction');
-                  if (reason != null && ctx.mounted) {
-                    await perform(
-                      ctx,
-                      () => app.voidDocument(d, reason),
-                      success: 'Saved',
-                    );
-                  }
+                  final reason = await confirmDelete(
+                    ctx,
+                    'Delete this entry? Its gas goes back to stock automatically and its amounts leave the khata.',
+                  );
+                  if (reason == null || !ctx.mounted) return;
+                  final ok = await perform(
+                    ctx,
+                    () => app.voidDocument(d, reason),
+                    success: 'Entry delete ho gayi',
+                  );
+                  if (ok && ctx.mounted) Navigator.pop(ctx);
                 },
                 child: Text(
-                  ctx.t(
-                    d.type == EntryType.sale ? 'Credit note' : 'Void entry',
-                  ),
+                  ctx.t('Delete'),
                   style: const TextStyle(color: Color(0xffa33d3d)),
                 ),
               ),

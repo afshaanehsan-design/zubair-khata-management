@@ -40,9 +40,9 @@ The resulting `build/Zubair-Khata-1.0.0-Windows-x64.zip` contains the executable
 - **Roznamcha:** the daily cash book laid out like the original page: summary cards (A: Aamad, B: Kharcha + Bank Jama, Safi Baqaya, gas dispatch, calculated bill with day-rate apply), the Naya Entry tabs, the A: Aamad / Wasooli and B: Kharcha tables, Hisab Mel, Roznamcha Save, Agla Din, Khata Saaf (new batch), printing and closing.
 - **Activity:** search and filter source transactions; inspect effects; correct or void with an audit reason.
 - **Parties:** customers, suppliers and Udhari classifications over one identity. View trade accounts, invoices, custody and deposits independently.
-- **Money:** cash/bank/personal accounts, statements, transfers and counted-balance reconciliation.
+- **Money:** cash/bank/personal accounts, a Total bank card, statements (one per account, and a cash-and-bank statement printed like the Roznamcha), transfers and counted-balance reconciliation.
 - **Stock:** gas FIFO lots, unknown costs, full/empty/held cylinders, filling, exchange, issue and return.
-- **Reports:** PDF preview/printing, real XLSX, UTF-8 CSV and copyable tables.
+- **Reports:** PDF preview/printing (every report, statement and invoice printed in the Roznamcha sheet's design), real XLSX, UTF-8 CSV and copyable tables.
 - **Settings:** organizations, business profile, complete Urdu RTL interface, cloud account, backups, conflict review and **Reset all data**.
 
 Use **Ctrl+N** for a new entry and **Ctrl+Enter** to add it. Unsaved values in the Roznamcha form and in the general composer are kept while you move between pages, until the app or organization is closed; a composer entry opened again goes on the page's date, not the day it was begun. Roznamcha Save and Agla Din do not save a day again when it has not changed.
@@ -426,3 +426,111 @@ These checks use local databases and native build tools. They do not establish a
 - Saved history and date ranges support the same PDF option. Stored entries, balances, Safi Baqaya, the page and Excel/CSV rows are unchanged.
 - Verification: the compact, Roznamcha page, sheet, report and translation tests passed (**17 tests**); static analysis reported no issues. The restored page toggle was checked at desktop and phone sizes down to 360×640 in both languages. Compact English and Urdu PDFs were rendered and checked visually, including full large amounts and the absence of bank/account labels in collection amount cells.
 - Not run: the full suite, native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app.
+
+## Roznamcha PDF: Total Gas Dispatch and Calculated Bill — 14 November 2026
+
+- Asked by the user: the Roznamcha PDF's summary row now has two more boxes after Opening, A: Kul Aamad, B: Kharcha + Bank Jama and Safi Baqaya: **Total Gas Dispatch (KG)** (cylinder counts per size and bulk KG beside it) and **Calculated Bill** (Cylinder and Bulk beside it). This reverses the 13 November note that these two were no longer printed.
+- Both show exactly the Roznamcha page cards' values (`RoznamchaDay.dispatchGrams` and `bill`): the bill leaves out purchase shares (still in A's Bill total), and the dispatch counts their KG. A day with no sales prints them at 0.
+- Every Roznamcha PDF has them: Print / PDF, Day history, Reports → Daily roznamcha, normal and Compact, English and Urdu. In an Urdu sheet with Urdu "Bulk" in the gas box, each Latin part is isolated so "151.7 kg" stays beside its own label. Excel/CSV, the page and stored data are unchanged.
+- Verification: `flutter analyze` on the changed files: no issues. Full `flutter test`: **209 tests passed**, including the 25-10-2026 reference day (both boxes at 0), the day with every extra kind of entry (73.6 kg, Rs 28,941 = 26,975 + 1,966), a new purchase-share case and the Urdu isolation. English, Urdu and reference PDFs were rendered to PNG and checked by eye.
+- On a scratchpad copy of the live khata (read only), both days (12 and 13 November) printed the page's own dispatch and bill, with Safi Baqaya equal to cash in hand; 13 November prints 15,554 kg and Rs 7,917,671.
+- Not run: native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app, which shows the new PDF only after it is restarted.
+
+## Money page: Total bank card and cash-and-bank statement — 14 November 2026
+
+- Asked by the user: a **Total bank** card right after Cash on the Money page, with every bank account added together, and a **Statement** button whose PDF gives each account, Cash, Total bank and Total, in the Roznamcha's design.
+- The card (`Book.bankMoney`) is for the end of the top bar's day and counts archived accounts too, so an earlier day still adds up. It shows how many banks are listed, and tapping it opens the statement too.
+- The statement (`moneyReport`) is one Roznamcha-style sheet printed by the same renderer: title and print stamp, the day with Total (Cash + Bank), a summary row Cash | Total bank | Total (Cash + Bank) with openings, then each account's Opening, Money in, Money out and Closing, with Cash, Total bank and Total (Cash + Bank) rows under it. An archived account is listed only on a day it held or moved money. Urdu prints the same sheet mirrored. Nothing stored changed.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **212 tests passed**, including three new tests in `test/money_page_test.dart` (card order and totals, the statement's figures on three days with an archived account, English and Urdu PDFs on one page) and the layout test at all six sizes in both languages. Both PDFs were rendered to PNG and checked by eye.
+- Not run: native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app, which shows the new card and button only after it is reloaded.
+
+## Every report PDF in the Roznamcha design — 14 November 2026
+
+- Asked by the user (with a screenshot of the Party statement still in the old green-header table): every report printed like the Roznamcha. Every PDF is now a Roznamcha-style sheet: "Zubair Traders — <report>" and the print stamp, a bold heading (dates, party or account, the key figure), a summary row of figures like the Roznamcha's cards, then tables with capital heads, a `#` column, figures on the right with '—' for nothing, dates as dd-mm-yyyy and a bold Total row.
+- Each report has its own summary: Party statement (Opening, Debit, Credit, Balance, Refundable deposit and cylinders held when there are any, with the khata and deposits as separate tables and the balance brought forward unnumbered), Cash/Bank book (Opening, Money in, Money out, Closing), the registers, Customer balances/Udhari, Overdue, Gas stock (Opening, Gas in, Gas out, Closing), FIFO, Profit (its six figures), Cylinder custody, Deposit liabilities and the Audit trail. Daily customer balances prints one table a day; days and parties with no figure, and parties whose balances are all 0 in the balance lists, are left out of the print. The invoice/receipt prints its items with the bill, payments and outstanding as the table's foot. Any other report goes through the same design automatically.
+- Pending balances keeps the paper sheet's two grids a page, now drawn in the same black-and-white style (no green fill, grey rules, capital heads, title and print stamp).
+- A wide table that does not fit even at the smallest zoom lets its headings take two lines. In Urdu the sheets are mirrored; summary boxes with Urdu keep each part whole.
+- Nothing stored changed. The table, Excel and CSV rows are unchanged, except that Overdue and FIFO allocations gained a Total row and Cylinder custody's counts are numbers in Excel.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **217 tests passed**, including the new `test/report_sheet_test.dart` (the party statement sheet cell by cell, every report's sheet in both languages with rows that fill their tables, the summaries' figures, the invoice, the automatic sheet, and every report printed to PDF in English and Urdu). English and Urdu previews were rendered to PNG and checked by eye. On a scratchpad copy of the live khata (read only), Imtiaz's statement printed 137,975 / 137,970 / Owes you 5 as on screen; the cash book, sales register and customer balances also printed.
+- Not run: native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app, which shows the new PDFs only after it is restarted.
+
+## Parties page: party count and totals in the heading — 14 November 2026
+
+- Asked by the user: the total receivable and payable of all parties beside the "Parties" heading, and how many parties there are, without numbering any party.
+- Beside "Parties" a small badge gives the number of listed parties. On the far side of the same line are **You will receive** and **You will pay** in all (payable in red), the sums of the rows' own figures (`partyOwed`). All three follow the filter chips, the Archived switch and the search, like the Pending balances PDF, so under "All" they are for every party and under "Customers" for the customers only. Rows are not numbered. Nothing stored changed.
+- `PageHeading` gained optional `count` and `beside`; other pages are unchanged.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **218 tests passed**, including a new test in `test/entry_facts_test.dart` (count and totals beside the list and on a 360x640 phone, and after a filter) and the layout test at all six sizes in both languages. English and Urdu previews at desktop and phone size were rendered to PNG and checked by eye.
+- Not run: native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app, which shows the heading only after it is reloaded.
+
+## Pending balances: only the day's changes, with details — 14 November 2026
+
+- Asked by the user: besides the complete Pending balances sheet, a second one for the current day only, of the parties whose pending balance changed that day; a party that cleared its balance that day is shown with 0; and a switch in the PDF for a detailed version.
+- The Pending balances button on the Parties page now opens a menu: **All pending balances** (the sheet as before) and **Changed on this day only · <date>**, for the date in the top bar.
+- The day sheet is the same paper-style sheet (No., Name, Baqaya jaat, two grids a page) with only the parties whose khata balance that day's entries changed. Each shows its balance at the end of that day, so on an earlier date it is that day's balance, not today's. A party whose entries of the day cancel out (a sale paid in full) is not listed, because its balance did not change. The filter chips, Archived switch and search apply as on the complete sheet. With nothing changed it says "No pending balance changed on this day".
+- Its PDF preview has a **Details** switch. On, the same parties are printed as one Roznamcha-style sheet: Previous balance, Debit (added that day), Credit (taken off that day) and Baqaya jaat, with a Total row and a summary row; "+" still marks what you will pay. Off, it is the grid sheet again.
+- Fixed on the way: the Urdu Pending balances PDF did not print its bold heading line (the date and filter), because Urdu lines are taller than the space kept for the heading. It prints now, and two full grids with the totals still fit one page.
+- Nothing stored changed; no accounting change.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **219 tests passed**, including the layout test at all six sizes in both languages. New cases in `test/pending_report_test.dart` cover the day's parties and figures (a part payment, a cleared khata at 0, a paid company, a sale paid in full left out, a later day, the filter), the detailed sheet cell by cell in English and its Urdu heads, the menu's two choices and messages, and the PDFs of both sheets in both languages. The English and Urdu PDFs (day, detailed, and a full Urdu page) and the menu were rendered to PNG and checked by eye.
+- Not run: native Windows/Android builds, the backend test (no accounting change), a run against the live khata, or a restart of the running live app, which shows the menu only after it is reloaded.
+
+## Deleting an entry: one step, stock returns by itself — 14 November 2026
+
+- Asked by the user: deleting a sale opened the credit note form and asked whether to return gas to stock. Deleting should not ask that; the gas should go back to the FIFO stock it came from automatically, and deleting should be simple.
+- The red button in an entry's details window (Parties, Activity) is now **Delete** for every entry type, sales included. It asks once ("Delete this entry? Its gas goes back to stock automatically and its amounts leave the khata."), then voids the entry and closes the window. A void takes the entry out of the projection, so its gas, cost and khata amounts come off by themselves, back to the same FIFO lots; nothing has to be chosen.
+- The reason is now optional when deleting, here and on the Roznamcha page: left empty, the audit trail records "Deleted". Corrections and other reason prompts still require one.
+- Credit notes (partial returns, or a financial-only credit) remain under New entry → Credit note.
+- Nothing stored changed; no accounting change.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **220 tests passed**, including a new widget test in `test/entry_facts_test.dart` (a purchase and a sale; Delete in the details window shows no credit note form or stock question, confirms with an empty reason, voids the sale with reason "Deleted", and stock and inventory value return to what they were before the sale) and the layout test at all six sizes in both languages.
+- Not run: native Windows/Android builds, the backend test (no accounting change), or a restart of the running live app, which shows the new button only after it is reloaded.
+
+## Less / Kami: Cash kam and Cash zyada, with no party — 16 November 2026
+
+- Asked by the user: sometimes cash in hand is short or over for a reason that has no party (cash lost, money outside the khata). It should be possible to reduce or add cash without it coming from or going to a party.
+- The Roznamcha's Less / Kami tab has two more choices under "Less kaise?": **Cash kam (nuqsan / khata se bahar)** and **Cash zyada (izafa)**. They ask for no customer, only the amount and a reason (required), and show cash in hand before and after.
+- Decided with the user: the entry only corrects cash in hand and does not change the Profit report. It is saved as the existing `adjustment` on `money:cash` (negative for Cash kam), which client and server already validate and project, so there is no migration, no new field and nothing new for Reset all data.
+- The row is named "Cash kam" or "Cash zyada" on the Roznamcha page, in entry details, the reports and the PDF (`adjustmentLabel`); this also renames earlier cash corrections made from New entry → Adjustment, which are the same thing. Safi Baqaya still equals the ledger's cash; the Opening line keeps showing "(pichla closing …, Adjustment ±…)". Editing the row opens the existing balance dialog.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **221 tests passed**, including a new widget test in `test/daily_entry_test.dart` (Cash kam Rs 500 is refused without a reason, then saved as −50000 paisa on `money:cash` with no party; Cash zyada Rs 200; no party created; Safi Baqaya equals ledger cash; the unsaved choice survives leaving the tab) and the layout test at all six sizes in both languages.
+- Not run: native Windows/Android builds, the backend test (no accounting or server change), or a restart of the running live app, which shows the new choices only after it is reloaded.
+
+## Search bar: clear button — 16 November 2026
+
+- Asked by the user: when something is typed in the top search bar, an X should appear on its right to remove the whole text.
+- The search field in the top bar (`lib/ui/app.dart`) now shows a close icon (tooltip "Clear search" / "تلاش صاف کریں") whenever it has text. Tapping it empties the field and the search, so lists show everything again. It is hidden while the field is empty.
+- Nothing stored changed; no accounting change.
+- Verification: `flutter analyze` on the changed files: no issues. `test/l10n_test.dart` and `test/layout_overflow_test.dart` (all six sizes, both languages, Windows and Android): passed.
+- Not run: the rest of the test suite, native builds, or a restart of the running live app, which shows the button only after it is reloaded.
+## Pending balances: Roznamcha size, biggest first, the day's changes shaded — 16 November 2026
+
+- Asked by the user: make the Pending balances PDF smaller, the same size as the Roznamcha; put the parties with the biggest balance on top; and in the full report, lightly highlight the parties whose balance changed today.
+- The PDF's grids now use the Roznamcha sheet's sizes: 18 pt margin, 8.3 pt title and heading, 6.4 pt print stamp, 7.3 pt table text, rows of 15 pt instead of 20. A grid holds 45 rows instead of 32, so one A4 page takes 90 parties instead of 64, in English and Urdu.
+- Both sheets (All pending balances and Changed on this day only, including its Details table) list the biggest balance first: everything to receive, largest first, then everything to pay ("+"), largest first. Equal balances keep the page's order. Row numbers follow the new order.
+- All pending balances shades, in light grey, the rows of the parties whose khata balance the top bar's date changed (normally today), on screen and in the PDF, and adds a note under the totals: "Shaded: balance changed on <date> (<count>)". A party whose entries that day cancel out (a sale paid in cash) is not shaded. The day-only sheet is not shaded, since every row on it changed. One new Urdu label.
+- Report output only: nothing stored changed, no accounting or server change, Reset all data unaffected.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **221 tests passed**. `test/pending_report_test.dart` now checks the order of both sheets and the Details table, the shaded rows and the note for three different days, that the day sheet never shades, and that 90 rows plus both notes fit one page in English and Urdu while 91 need a second. The English and Urdu PDFs were rendered to PNG and checked by eye beside the Roznamcha sheet.
+- Not run: native Windows/Android builds, the backend test (no server change), or a restart of the running live app, which shows the change only after it is reloaded.
+
+## PDF size slider — 16 November 2026
+
+- Asked by the user: a slider on every PDF report to make what is printed bigger or smaller, from 50% to 150%, changing the real PDF and remembered for each report.
+- Every PDF preview (Roznamcha Print / PDF, Day history, Reports, party statements, invoices, the Money statement, Pending balances) has a **Size** bar under its title: − and + in 5% steps, the slider, and the percentage, which goes back to 100% when tapped. The PDF is built again when the slider is let go; what is saved, shared or printed is the PDF shown.
+- Type, padding, row heights and spacing grow or shrink; the A4 page and its 18 pt margin do not. A wide Roznamcha day still shrinks to fit the page from the chosen size, and what is still too wide wraps. Pending balances grids hold 45 rows at 100%, 97 at 50% and 27 at 150%. At 100% the PDFs are exactly as before.
+- The size is remembered for each kind of report (Daily roznamcha, Party statement, Invoice, Pending balances…) in the organization's own database (`pdf_sizes` metadata). Reset all data erases it (back to 100%); a backup restore brings back the backup's sizes. Excel, CSV and the on-screen tables are unchanged. No accounting, server or stored-entry change. Three new Urdu labels.
+- Verification: `flutter analyze`: no issues. Full `flutter test`: **227 tests passed**, in a worktree, including the new `test/pdf_size_test.dart` (remembering, rounding to 5% and the 50–150 limits, a new start, a damaged value, Reset all data and backup restore; the exporter's limits; grid rows at every step fit the page; the bar's buttons, reset and drag; and long Customer balances and Pending balances PDFs at 50%, 100% and 150% in English and Urdu, with fewer pages smaller and more bigger, and 100% as before). The layout test now draws the preview's title bar with no switch, Compact and Details at all six sizes in both languages. PDFs at 50% and 150% were rendered to PNG with `tool/render_pdf.ps1` and checked by eye.
+- Not run: native Windows/Android builds, the backend test (no server change), or a restart of the running live app, which shows the slider only after it is reloaded.
+
+## Pending balances: the complete sheet on the top bar's date — 16 November 2026
+
+- Asked by the user: with today the 16th and the 13th chosen in the top bar, the complete Pending balances sheet showed today's balances while shading the 13th's changes. It should be built on the chosen date.
+- **All pending balances · <date>** (the menu item now shows the date) is the balances at the end of the top bar's date (`pendingReport(..., asOf: app.selectedDate)`, which uses `app.bookAt`), with that date in its heading; entries after it are not counted. The parties whose balance that date changed are shaded, as before. On today's date nothing changes.
+- Report output only: nothing stored changed, no accounting or server change.
+- Verification: `flutter analyze`: no issues. `test/pending_report_test.dart` checks the sheet on three dates (balances at the end of each, Ali's later payment left out, Hassan still listed before he paid, the subtitle date, the totals and the shading) and the menu label; `test/l10n_test.dart`, `test/layout_overflow_test.dart` and `test/report_sheet_test.dart` passed, then the full `flutter test`: **227 tests passed**.
+- Not run: native builds, the backend test, or a restart of the running live app.
+
+## Pending balances: arrange A to Z, by balance or newest first — 16 November 2026
+
+- Asked by the user: besides the biggest balance first, Pending balances should be arrangeable A to Z by name, or newest first, with checks so exactly one is chosen, and A to Z by default.
+- The Pending balances menu on the Parties page has an **Arrange** section under its two sheets: **A to Z** (ticked at first), **Biggest balance first** and **Newest first** (the Parties list's own order). Exactly one is ticked; choosing another ticks it and opens the menu again, so the sheet can be picked next. The choice is kept while the app is open (`AppController.pendingOrder`), like the Roznamcha's Customer wise toggle, and applies to both sheets and the day sheet's Details table.
+- A to Z ignores capital and small letters ("aslam" sorts after "Ali Raza"). Urdu names follow the order of their letters in Unicode, after Latin names. Equal names or balances keep the list's order. Rows are numbered in the printed order, the shading follows its rows, and the subtitle names the order (e.g. "· A to Z ·"). Totals never change.
+- Report output only: nothing stored changed, no accounting or server change; the choice is a view setting, so Reset all data leaves it alone. Three new Urdu labels: Arrange (ترتیب), A to Z, Biggest balance first.
+- Verification: `flutter analyze`: no issues. `test/pending_report_test.dart` checks all three orders on the complete and day sheets (case ignored, numbering, the Details table, shading in two orders, totals unchanged, the subtitle in English and Urdu) and the menu: only A to Z ticked at first, each choice moves the tick and reopens the menu, Escape closes it. `test/l10n_test.dart` passed; full `flutter test`: **227 tests passed**.
+- Not run: native builds, the backend test, or a restart of the running live app.

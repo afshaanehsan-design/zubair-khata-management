@@ -9,6 +9,7 @@ import 'package:zubair_khata_management/core/models.dart';
 import 'package:zubair_khata_management/data/database.dart';
 import 'package:zubair_khata_management/features/ledger/entry_facts.dart';
 import 'package:zubair_khata_management/features/reports/reports.dart';
+import 'package:zubair_khata_management/ui/components.dart';
 import 'package:zubair_khata_management/ui/details.dart';
 import 'package:zubair_khata_management/ui/pages.dart';
 import 'package:zubair_khata_management/ui/roznamcha_form.dart';
@@ -172,6 +173,59 @@ void main() {
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      app.dispose();
+      await db.close();
+    },
+  );
+
+  testWidgets(
+    'Parties: the heading counts the listed parties and totals both sides',
+    (tester) async {
+      final (app, db) = await start();
+      await mixedParties(app); // Owes, Company, Both, Clear.
+      Finder total(String text) => find.descendant(
+        of: find.byKey(PartiesPage.totalsKey),
+        matching: find.text(text),
+      );
+      String count() =>
+          tester.widget<Text>(find.byKey(PageHeading.countKey)).data!;
+      // Beside the list, and on a phone.
+      for (final size in const [Size(1200, 900), Size(360, 640)]) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(body: PartiesPage(app, key: ValueKey(size))),
+          ),
+        );
+        await tester.pumpAndSettle();
+        // All four: Owes and Both owe Rs 1,000 each; Company and Both are
+        // owed Rs 300 each.
+        expect(count(), '4', reason: '$size');
+        expect(total('Rs 2,000'), findsOneWidget);
+        expect(total('Rs 600'), findsOneWidget);
+        expect(total('You will receive'), findsOneWidget);
+        expect(total('You will pay'), findsOneWidget);
+        // On the title's line, on its far side.
+        final title = tester.getRect(find.text('Parties'));
+        final totals = tester.getRect(find.byKey(PartiesPage.totalsKey));
+        expect(totals.left, greaterThan(title.right));
+        expect(totals.top, lessThan(title.bottom));
+
+        // The figures are for the parties the list shows.
+        await tester.tap(find.widgetWithText(ChoiceChip, 'You will pay'));
+        await tester.pumpAndSettle();
+        expect(count(), '2'); // Company and Both
+        expect(total('Rs 1,000'), findsOneWidget);
+        expect(total('Rs 600'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+      // No party is numbered.
+      expect(find.text('1'), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());
       app.dispose();
@@ -600,6 +654,85 @@ void main() {
     app.dispose();
     await db.close();
   });
+
+  testWidgets(
+    'Delete in the details dialog voids a sale and its gas returns to stock',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      late AppController app;
+      late KhataDatabase db;
+      late Document sale;
+      int stock() => app.book.lots.fold(0, (v, l) => v + l.grams);
+      late int stockBefore, inventoryBefore;
+      await tester.runAsync(() async {
+        (app, db) = await start();
+        await app.saveMaster('party', {'name': 'Ali Raza', 'customer': true});
+        final ali = app.partyByName('Ali Raza')!.id;
+        await app.saveMaster('party', {'name': 'Gas Co', 'supplier': true});
+        await app.post({
+          'type': 'purchase',
+          'date': app.selectedDate,
+          'party': app.partyByName('Gas Co')!.id,
+          'grams': 100000,
+          'rate': 30000,
+          'rateUnit': 1000,
+        });
+        stockBefore = stock();
+        inventoryBefore = app.book.balance('inventory');
+        await app.post({
+          'type': 'sale',
+          'date': app.selectedDate,
+          'party': ali,
+          'quantities': {'11800': 2},
+          'rate': 1349100,
+        });
+        sale = doc(app, (d) => d.type == EntryType.sale);
+      });
+      expect(stock(), stockBefore - 23600);
+
+      late BuildContext context;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (c) {
+                context = c;
+                return const SizedBox();
+              },
+            ),
+          ),
+        ),
+      );
+      unawaited(showTransaction(context, app, sale));
+      await tester.pumpAndSettle();
+      // No credit note form and no stock question: just Delete.
+      expect(find.text('Credit note'), findsNothing);
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Return gas to stock'), findsNothing);
+      // The reason is optional.
+      await tester.tap(find.text('Haan, delete'));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 300)),
+      );
+      await tester.pumpAndSettle();
+
+      final voided = app.record(sale.id)!;
+      expect(voided.data['voided'], true);
+      expect(voided.data['voidReason'], 'Deleted');
+      expect(stock(), stockBefore);
+      expect(app.book.balance('inventory'), inventoryBefore);
+      // The details dialog closed.
+      expect(find.text('Delete'), findsNothing);
+      await tester.runAsync(() async {
+        app.dispose();
+        await db.close();
+      });
+    },
+  );
 
   testWidgets(
     'The details dialog explains the sale and the party ledger shows balances',

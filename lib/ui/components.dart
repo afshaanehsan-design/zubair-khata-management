@@ -62,50 +62,110 @@ Future<bool> perform(
 class PageHeading extends StatelessWidget {
   final String title, subtitle;
   final List<Widget> actions;
+
+  /// How many the page lists, shown beside the title.
+  final int? count;
+
+  /// The page's totals, on the far side of the title's line. The actions
+  /// then get the line below.
+  final Widget? beside;
+
+  /// The number beside the title (for tests).
+  static const countKey = Key('page-heading-count');
   const PageHeading(
     this.title,
     this.subtitle, {
     this.actions = const [],
+    this.count,
+    this.beside,
     super.key,
   });
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 24),
-    child: LayoutBuilder(
-      builder: (context, constraints) => Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 16,
-        runSpacing: 12,
-        children: [
-          SizedBox(
-            width: (constraints.maxWidth - (actions.isEmpty ? 0 : 250))
-                .clamp(180, 600)
-                .toDouble(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  context.t(title),
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -.7,
-                    color: ink,
+  Widget build(BuildContext context) {
+    final name = Text(
+      context.t(title),
+      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+        fontWeight: FontWeight.w800,
+        letterSpacing: -.7,
+        color: ink,
+      ),
+    );
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (count == null)
+          name
+        else
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(child: name),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xffe9efe4),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$count',
+                  key: countKey,
+                  textDirection: TextDirection.ltr,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: teal,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  context.t(subtitle),
-                  style: const TextStyle(color: muted, fontSize: 14),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-          ...actions,
-        ],
-      ),
-    ),
-  );
+        const SizedBox(height: 6),
+        Text(
+          context.t(subtitle),
+          style: const TextStyle(color: muted, fontSize: 14),
+        ),
+      ],
+    );
+    final side = beside;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: side != null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: heading),
+                    const SizedBox(width: 12),
+                    side,
+                  ],
+                ),
+                if (actions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(spacing: 16, runSpacing: 12, children: actions),
+                ],
+              ],
+            )
+          : LayoutBuilder(
+              builder: (context, constraints) => Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 16,
+                runSpacing: 12,
+                children: [
+                  SizedBox(
+                    width: (constraints.maxWidth - (actions.isEmpty ? 0 : 250))
+                        .clamp(180, 600)
+                        .toDouble(),
+                    child: heading,
+                  ),
+                  ...actions,
+                ],
+              ),
+            ),
+    );
+  }
 }
 
 class Panel extends StatelessWidget {

@@ -30,7 +30,7 @@ import 'reports.dart'
 
 // The Roznamcha PDF, printed like the original page's "Roznamcha History
 // (Date wise)" export (index.html: renderHistory and exportData): a title and
-// print stamp, the day with its Safi Baqaya, the four summary figures, then
+// print stamp, the day with its Safi Baqaya, the summary figures, then
 // A (Aamad / Wasooli), Bank Nikali / Less and B (Kharcha + Bank Jama). What
 // the original page could not hold (direct payments, opening balances, gas
 // and stock entries) is added only on the days that have it.
@@ -108,14 +108,20 @@ class SheetTable {
   });
 }
 
-/// One day of the Roznamcha, as printed.
+/// One day of the Roznamcha, as printed, or another report in its design
+/// (`report_sheet.dart`).
 class RozSheet {
   final String date, title, stamp, heading;
+
+  /// The row of figures under the heading; not printed when it has no head.
   final SheetTable summary;
 
   /// A, then Bank Nikali / Less when the day has any, B, then the day's
   /// entries outside the cash book when it has any.
   final List<SheetTable> tables;
+
+  /// Lines printed under the tables (a report's notes).
+  final List<String> notes;
   const RozSheet({
     required this.date,
     required this.title,
@@ -123,6 +129,7 @@ class RozSheet {
     required this.heading,
     required this.summary,
     required this.tables,
+    this.notes = const [],
   });
 
   /// The table with [title], or null.
@@ -138,7 +145,7 @@ class RozSheet {
 String _two(int v) => '$v'.padLeft(2, '0');
 
 /// A day as the original page wrote it: 25-10-2026.
-String _dmy(String date) {
+String rozDmy(String date) {
   final p = date.split('-');
   return p.length == 3 ? '${p[2]}-${p[1]}-${p[0]}' : date;
 }
@@ -156,7 +163,7 @@ String rozSavedTime(String savedAt) {
 
 /// The line under the title: the app's date and the moment of printing.
 String rozStamp(String date, Words t, [DateTime? now]) =>
-    '${t('Date')}: ${_dmy(date)} | ${t('Print')}: ${rozTime(now ?? DateTime.now())}';
+    '${t('Date')}: ${rozDmy(date)} | ${t('Print')}: ${rozTime(now ?? DateTime.now())}';
 
 /// When [day] was saved (Roznamcha Save, Agla Din), if its latest saved copy
 /// still holds exactly its entries ([AppController.saveSnapshot]'s test);
@@ -278,23 +285,38 @@ RozSheet rozSheet(
     SheetRun(name),
   ];
 
-  // ---------- summary (the page's four cards) ----------
+  // ---------- summary (the history print's four cards, then the Roznamcha
+  // page's Total Gas Dispatch and Calculated Bill, with the screen's figures,
+  // printed on every day, at 0 when nothing was sold) ----------
 
-  SheetCell stat(int v, List<String> notes) => SheetCell([
+  SheetCell figure(String value, List<String> notes) => SheetCell([
     [
-      SheetRun('Rs. ${money(v)}', bold: true),
+      SheetRun(value, bold: true),
       const SheetRun(' '),
       SheetRun(notes.join(' | '), small: true),
     ],
   ]);
+  SheetCell stat(int v, List<String> notes) => figure('Rs. ${money(v)}', notes);
+  final gasNotes = [
+    for (final s in sizes) '${sizeLabel(s)}: ${day.cylinders[s]}',
+    if (day.bulkGrams > 0) '${t('Bulk')} ${kg(day.bulkGrams)} kg',
+  ];
+  // An Urdu word among the Latin sizes makes the box a right-to-left
+  // paragraph, where "151.7 kg" would land beside "45 KG:". Each part is
+  // isolated so it stays whole and in its place.
+  final mixedGas = t.urdu && hasUrduScript(gasNotes.join());
+  String gasPart(String s) =>
+      mixedGas ? '${hasUrduScript(s) ? _rli : _lri}$s$_pdi' : s;
   final summary = SheetTable(
     title: '',
-    wrap: const {0, 1, 2, 3},
+    wrap: const {0, 1, 2, 3, 4, 5},
     head: [
       head(t('Opening')),
       head(t('A: Kul Aamad')),
       head(t('B: Kharcha + Bank Jama')),
       head(t('Safi Baqaya')),
+      head(t('Total Gas Dispatch (KG)')),
+      head(t('Calculated Bill')),
     ],
     body: [
       [
@@ -312,6 +334,13 @@ RozSheet rozSheet(
           if (day.direct > 0) '${t('Direct')} ${money(day.direct)}',
         ]),
         stat(day.safi, ['${t('Bank Baqi')} ${money(day.bankNet)}']),
+        figure(gasPart('${kg(day.dispatchGrams)} kg'), [
+          for (final n in gasNotes) gasPart(n),
+        ]),
+        stat(day.bill, [
+          '${t('Cylinder')} ${money(day.cylinderBill)}',
+          '${t('Bulk')} ${money(day.bulkBill)}',
+        ]),
       ],
     ],
     top: true,
@@ -539,7 +568,7 @@ RozSheet rozSheet(
     final account = target.startsWith('money:');
     middleRow(
       ('opening', d.id),
-      isOpeningBalance(d) ? t('Opening balance') : t('Adjustment'),
+      t(adjustmentLabel(d)),
       account ? bankOf(id) : '—',
       account ? holder(id) : app.name(id),
       _join([adjustmentMeaning(d, t, app), iso(_cap(rozNote(d)))]),
@@ -715,7 +744,7 @@ RozSheet rozSheet(
     title: '${t('Roznamcha History')} — ${t('Roznamcha History (Date wise)')}',
     stamp: stamp,
     heading: _join([
-      _dmy(day.date),
+      rozDmy(day.date),
       if (saved.isNotEmpty) '${t('Saved')}: $saved',
       '${t('Safi Baqaya')}: Rs. ${money(day.safi)}',
     ], ' '),
@@ -765,9 +794,15 @@ const _grey = PdfColor.fromInt(0xff555555);
 const _muted = PdfColor.fromInt(0xff6b7686);
 const _rule = pw.BorderSide(color: _grey, width: .6);
 
-/// [report]'s sheets as a PDF: each day on its own pages, black on white like
-/// the original print (its grey fills never reached the paper).
-Future<Uint8List> rozSheetPdf(Report report, ReportExporter exporter) async {
+/// [report]'s sheets (or [sheets] in their place) as a PDF: each day on its
+/// own pages, black on white like the original print (its grey fills never
+/// reached the paper).
+Future<Uint8List> rozSheetPdf(
+  Report report,
+  ReportExporter exporter, [
+  List<RozSheet>? sheets,
+]) async {
+  final printed = sheets ?? report.sheets;
   final fallback = pw.Font.ttf(
     await rootBundle.load('assets/fonts/Manrope.ttf'),
   );
@@ -775,13 +810,19 @@ Future<Uint8List> rozSheetPdf(Report report, ReportExporter exporter) async {
   final renderer = UrduPdfRenderer(rtl: rtl);
   const format = PdfPageFormat.a4;
   final width = format.width - _margin * 2;
-  final total = report.sheets.fold(0, (v, s) => v + s.rows);
+  final total = printed.fold(0, (v, s) => v + s.rows);
   var done = 0;
+
+  // The preview's size slider: headings, notes and spacing scale with it, and
+  // the tables start from it. The paper and its margin do not change.
+  final size = exporter.size;
+  double gap(double points) => points * size;
 
   // The page's zoom: the original shrank its whole print to fit the widest
   // table, so a day with wide content prints a little smaller here too (the
-  // tables only, and not below [_minScale]); what is still too wide wraps.
-  var scale = 1.0;
+  // tables only, and not below [_minScale] of the chosen size); what is
+  // still too wide wraps.
+  var scale = size;
   double text() => _textSize * scale;
   double small() => _smallSize * scale;
   double padX() => _padX * scale;
@@ -948,11 +989,33 @@ Future<Uint8List> rozSheetPdf(Report report, ReportExporter exporter) async {
     return widest + padX() * 2 + 1;
   }
 
+  // How wide a heading's longest word is, for a table whose headings cannot
+  // all keep one line: such a heading takes two lines instead.
+  double word(SheetCell cell) {
+    var widest = 0.0;
+    for (final l in cell.lines) {
+      for (final r in l) {
+        for (final w in r.text.split(' ')) {
+          widest = math.max(
+            widest,
+            renderer.measure([
+              (w, r.bold, r.small ? small() : text()),
+            ], letterSpacing: _headSpacing * scale),
+          );
+        }
+      }
+    }
+    return widest + padX() * 2 + 1;
+  }
+
   double sum(Iterable<double> v) => v.fold(0.0, (a, b) => a + b);
 
-  // Each column's heading width and the width its content wants on one line.
-  (List<double>, List<double>) measured(SheetTable t) {
-    final heads = [for (final c in t.head) need(c, head: true)];
+  // Each column's heading width and the width its content wants on one line
+  // ([words]: the heading's longest word instead of the whole heading).
+  (List<double>, List<double>) measured(SheetTable t, {bool words = false}) {
+    final heads = [
+      for (final c in t.head) words ? word(c) : need(c, head: true),
+    ];
     final wants = List.of(heads);
     for (final r in [...t.body, ...t.foot]) {
       var i = 0;
@@ -978,42 +1041,48 @@ Future<Uint8List> rozSheetPdf(Report report, ReportExporter exporter) async {
   // as wide as its content on one line, the room left shared in proportion.
   // When that is wider than the page, headings and values keep one line and
   // the text columns ([SheetTable.wrap]) share what is left in proportion to
-  // their text, each at least as wide as its heading.
+  // their text, each at least as wide as its heading. A table that still
+  // does not fit (a report with many figure columns) tries again with each
+  // heading as wide as its longest word, so long headings take two lines.
   List<double> columns(SheetTable t) {
-    final (heads, wants) = measured(t);
-    final total = sum(wants);
-    if (total <= width) return [for (final w in wants) w * width / total];
-    final result = List.of(wants);
-    final open = {
-      for (var i = 0; i < wants.length; i++)
-        if (t.wrap.contains(i)) i,
-    };
-    // One long note does not starve the other text columns.
-    final weight = weights(t, wants);
-    var free =
-        width -
-        sum([
-          for (var i = 0; i < wants.length; i++)
-            if (!open.contains(i)) wants[i],
-        ]);
-    while (open.isNotEmpty) {
-      final share = free / sum(open.map((i) => weight[i]));
-      final narrow = open.where((i) => share * weight[i] < heads[i]).toList();
-      if (narrow.isEmpty) {
-        for (final i in open) {
-          result[i] = share * weight[i];
+    var result = <double>[];
+    for (final words in [false, true]) {
+      final (heads, wants) = measured(t, words: words);
+      final total = sum(wants);
+      if (total <= width) return [for (final w in wants) w * width / total];
+      result = List.of(wants);
+      final open = {
+        for (var i = 0; i < wants.length; i++)
+          if (t.wrap.contains(i)) i,
+      };
+      // One long note does not starve the other text columns.
+      final weight = weights(t, wants);
+      var free =
+          width -
+          sum([
+            for (var i = 0; i < wants.length; i++)
+              if (!open.contains(i)) wants[i],
+          ]);
+      while (open.isNotEmpty) {
+        final share = free / sum(open.map((i) => weight[i]));
+        final narrow = open.where((i) => share * weight[i] < heads[i]).toList();
+        if (narrow.isEmpty) {
+          for (final i in open) {
+            result[i] = share * weight[i];
+          }
+          break;
         }
-        break;
+        for (final i in narrow) {
+          result[i] = heads[i];
+          free -= heads[i];
+          open.remove(i);
+        }
       }
-      for (final i in narrow) {
-        result[i] = heads[i];
-        free -= heads[i];
-        open.remove(i);
-      }
+      if (sum(result) <= width) return result;
     }
     // Only absurd content gets here: everything shrinks to fit.
     final used = sum(result);
-    return used <= width ? result : [for (final w in result) w * width / used];
+    return [for (final w in result) w * width / used];
   }
 
   // The rows in a one-column table, which splits between rows across pages
@@ -1044,49 +1113,62 @@ Future<Uint8List> rozSheetPdf(Report report, ReportExporter exporter) async {
       fontFallback: [fallback],
     ),
   );
-  for (final sheet in report.sheets) {
+  for (final sheet in printed) {
     // The summary wraps freely (as the page's did), so only the other
     // tables set the zoom.
-    scale = 1;
+    scale = size;
     var fit = 1.0;
     for (final t in sheet.tables) {
       final (_, wants) = measured(t);
       // 1% to spare for the slack that does not shrink with the type.
       fit = math.min(fit, width * .99 / sum(weights(t, wants)));
     }
-    scale = math.max(_minScale, fit);
+    scale = size * math.max(_minScale, fit);
     final content = <pw.Widget>[
       await line(
         [SheetRun(sheet.title)],
         width,
-        size: _headingSize,
+        size: gap(_headingSize),
         bold: true,
       ),
       await line(
         [SheetRun(sheet.stamp)],
         width,
-        size: _stampSize,
+        size: gap(_stampSize),
         color: _grey,
       ),
-      pw.SizedBox(height: 5),
+      pw.SizedBox(height: gap(5)),
       await line(
         [SheetRun(sheet.heading)],
         width,
-        size: _headingSize,
+        size: gap(_headingSize),
         bold: true,
       ),
-      pw.SizedBox(height: 2.5),
-      await table(sheet.summary),
+      if (sheet.summary.head.isNotEmpty) ...[
+        pw.SizedBox(height: gap(2.5)),
+        await table(sheet.summary),
+      ],
     ];
     for (final t in sheet.tables) {
       content.addAll([
         // A heading never ends a page alone (the page's break-after: avoid).
-        pw.NewPage(freeSpace: 64),
-        pw.SizedBox(height: 6.5),
-        await line([SheetRun(t.title)], width, size: _headingSize, bold: true),
-        pw.SizedBox(height: 2.5),
+        pw.NewPage(freeSpace: gap(64)),
+        pw.SizedBox(height: gap(6.5)),
+        if (t.title.isNotEmpty) ...[
+          await line(
+            [SheetRun(t.title)],
+            width,
+            size: gap(_headingSize),
+            bold: true,
+          ),
+          pw.SizedBox(height: gap(2.5)),
+        ],
         await table(t),
       ]);
+    }
+    if (sheet.notes.isNotEmpty) content.add(pw.SizedBox(height: gap(6.5)));
+    for (final note in sheet.notes) {
+      content.add(await line([SheetRun(note)], width, size: gap(_textSize)));
     }
     doc.addPage(
       pw.MultiPage(

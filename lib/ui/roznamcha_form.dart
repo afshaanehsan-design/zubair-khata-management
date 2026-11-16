@@ -29,7 +29,7 @@ enum RozTab {
   ),
   less(
     'Less / Kami',
-    'Customer ka hisab kam karna (discount / kami). Cash par asar nahi.',
+    'Customer ka hisab kam karna (discount / kami), ya cash kam / zyada karna bina kisi party ke.',
     Icons.content_cut_outlined,
   ),
   office(
@@ -242,7 +242,6 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   KharchaKind kind = KharchaKind.cash;
   bool payBank = false,
       bulkAtCost = true,
-      lessBank = false,
           // Bank Wasooli went to a company (Direct to Party), not to our bank.
           bankDirect =
           false,
@@ -250,6 +249,14 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       more = false,
       saving = false;
   String account = '', category = 'General';
+
+  /// "Less kaise?": `discount` and `bank` reduce a customer's khata;
+  /// `cashOut` and `cashIn` correct cash in hand with no party (cash lost,
+  /// or money outside the khata), as a `money:cash` adjustment.
+  String lessMode = 'discount';
+  bool get lessBank => lessMode == 'bank';
+  set lessBank(bool v) => lessMode = v ? 'bank' : 'discount';
+  bool get lessCash => lessMode == 'cashOut' || lessMode == 'cashIn';
 
   /// The reference of the purchase a share comes from; '' shares the oldest
   /// stock first (FIFO).
@@ -318,7 +325,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     'payBank': payBank,
     'bulkAtCost': bulkAtCost,
     'sharePurchase': sharePurchase,
-    'lessBank': lessBank,
+    'lessMode': lessMode,
     'bankDirect': bankDirect,
     'extraBanks': [
       for (final l in _extraBanks)
@@ -362,7 +369,10 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     payBank = s?['payBank'] == true;
     bulkAtCost = s?['bulkAtCost'] != false;
     sharePurchase = '${s?['sharePurchase'] ?? ''}';
-    lessBank = s?['lessBank'] == true;
+    final mode = '${s?['lessMode'] ?? ''}';
+    lessMode = const ['discount', 'bank', 'cashOut', 'cashIn'].contains(mode)
+        ? mode
+        : 'discount';
     bankDirect = s?['bankDirect'] == true;
     customerOwned = s?['customerOwned'] == true;
     if (s != null) account = '${s['account'] ?? ''}';
@@ -556,7 +566,8 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   };
 
   bool get _usesParty => switch (tab) {
-    RozTab.aamad || RozTab.less || RozTab.companyIn => true,
+    RozTab.aamad || RozTab.companyIn => true,
+    RozTab.less => !lessCash,
     RozTab.kharcha =>
       kind == KharchaKind.company ||
           kind == KharchaKind.customer ||
@@ -850,6 +861,25 @@ class RoznamchaFormState extends State<RoznamchaForm> {
           before,
         );
       case RozTab.less:
+        if (lessCash) {
+          // Cash short or over with no party: only cash in hand changes.
+          final amount = _money('amount');
+          if (amount <= 0) {
+            throw const FormatException('Raqam likhna zaroori hai');
+          }
+          if (note.isEmpty) {
+            throw const FormatException('Wajah likhna zaroori hai');
+          }
+          return (
+            {
+              'type': 'adjustment',
+              ...base,
+              'target': 'money:cash',
+              'amount': lessMode == 'cashOut' ? -amount : amount,
+            },
+            before,
+          );
+        }
         final pid = partyId(PartyRole.customer);
         final amount = _money('amount');
         if (amount <= 0) {
@@ -1218,6 +1248,13 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         return line == null ? null : _previewText(line, color: ink);
       case RozTab.less:
         final amount = _try(() => _money('amount'));
+        if (lessCash) {
+          final line = _accountPreview(
+            'cash',
+            lessMode == 'cashOut' ? -amount : amount,
+          );
+          return line == null ? null : _previewText(line, color: ink);
+        }
         return _previewLine([
           if (_balancePreview(-amount) case final b?)
             _previewText(b, color: ink),
@@ -1441,7 +1478,9 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                   contentPadding: EdgeInsets.zero,
                   title: Text(context.t('Share bulk at purchase cost')),
                   subtitle: Text(
-                    context.t('Not our sale; the party pays our purchase price.'),
+                    context.t(
+                      'Not our sale; the party pays our purchase price.',
+                    ),
                   ),
                   value: bulkAtCost,
                   onChanged: (v) {
@@ -1619,32 +1658,42 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         ];
       case RozTab.less:
         return [
-          GridItem(_party('Customer'), span: 2),
+          if (!lessCash) GridItem(_party('Customer'), span: 2),
           GridItem(
             RozSelect(
               'Less kaise?',
-              lessBank ? 'bank' : 'discount',
+              lessMode,
               const [
                 ('discount', 'Khata se minus (discount)'),
                 ('bank', 'Bank deposit (account mein jama)'),
+                ('cashOut', 'Cash kam (nuqsan / khata se bahar)'),
+                ('cashIn', 'Cash zyada (izafa)'),
               ],
               (v) {
-                lessBank = v == 'bank';
+                lessMode = v;
                 _changed();
               },
             ),
+            span: lessCash ? 2 : 1,
           ),
           if (lessBank) GridItem(_account('Kis account mein?'), span: 2),
           GridItem(
             _input(
-              'Tafseel (optional)',
+              lessCash ? 'Wajah (zaroori)' : 'Tafseel (optional)',
               'note',
               number: false,
               hint: 'Tafseel...',
             ),
             span: 2,
           ),
-          GridItem(_input('Less Raqam', 'amount', hint: 'Rs. 0', submit: true)),
+          GridItem(
+            _input(
+              lessCash ? 'Raqam' : 'Less Raqam',
+              'amount',
+              hint: 'Rs. 0',
+              submit: true,
+            ),
+          ),
         ];
       case RozTab.office:
         return [

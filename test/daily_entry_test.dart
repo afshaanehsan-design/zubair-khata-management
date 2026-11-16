@@ -266,6 +266,74 @@ void main() {
     await finish(tester, app, db);
   });
 
+  testWidgets('Less: Cash kam and Cash zyada change cash with no party', (
+    tester,
+  ) async {
+    final (app, db) = await start(tester);
+    final parties = app.ofKind('party').length;
+    await pumpForm(tester, app);
+    await tester.tap(tab('less'));
+    await tester.pumpAndSettle();
+
+    Future<void> choose(String from, String to) async {
+      await tester.tap(find.text(from));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(to).last);
+      await tester.pumpAndSettle();
+    }
+
+    const out = 'Cash kam (nuqsan / khata se bahar)';
+    const add = 'Cash zyada (izafa)';
+    await choose('Khata se minus (discount)', out);
+    // No customer is asked for; the reason is.
+    expect(field('party'), findsNothing);
+    await tester.enterText(field('amount'), '500');
+    await tester.tap(save);
+    await tester.pump();
+    expect(find.text('Wajah likhna zaroori hai'), findsOneWidget);
+    expect(app.book.documents, isEmpty);
+    await tester.enterText(field('note'), 'Cash gum ho gaya');
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final lost = app.book.documents.last;
+    expect(lost.type, EntryType.adjustment);
+    expect(lost.data['target'], 'money:cash');
+    expect(lost.value('amount'), -50000);
+    expect(lost.party, isEmpty);
+    expect(isOpeningBalance(lost), isFalse);
+    expect(adjustmentLabel(lost), 'Cash kam');
+    expect(app.book.money('cash'), -50000);
+
+    await choose(out, add);
+    await tester.enterText(field('amount'), '200');
+    await tester.enterText(field('note'), 'Ginti mein zyada nikla');
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final found = app.book.documents.last;
+    expect(found.value('amount'), 20000);
+    expect(adjustmentLabel(found), 'Cash zyada');
+    expect(app.book.money('cash'), -30000);
+    expect(app.ofKind('party').length, parties);
+
+    final day = RoznamchaDay(
+      app.selectedDate,
+      0,
+      app.book.documents.where((d) => d.date == app.selectedDate),
+    );
+    expect(day.cashAdj, -30000);
+    expect(day.openings.length, 2);
+    expect(day.safi, app.book.money('cash'));
+
+    // The unsaved choice is kept when the tab is left and opened again.
+    await tester.tap(tab('nikali'));
+    await tester.pumpAndSettle();
+    await tester.tap(tab('less'));
+    await tester.pumpAndSettle();
+    expect(find.text(add), findsOneWidget);
+    expect(field('party'), findsNothing);
+    await finish(tester, app, db);
+  });
+
   /// An Udhari party you borrowed Rs 3,225,000 from, as in the live khata.
   Future<String> usman(AppController app) async {
     await app.saveMaster('party', {

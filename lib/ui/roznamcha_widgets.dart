@@ -853,19 +853,34 @@ Future<String?> confirmReason(
   String message, {
   String confirm = 'Haan, delete',
   String? initial,
+  String? fallback,
 }) => showDialog<String>(
   context: context,
-  builder: (_) =>
-      _ReasonDialog(message: message, confirm: confirm, initial: initial),
+  builder: (_) => _ReasonDialog(
+    message: message,
+    confirm: confirm,
+    initial: initial,
+    fallback: fallback,
+  ),
 );
+
+/// Confirms a deletion in one step. The reason is optional: left empty, the
+/// audit trail records "Deleted". Voiding takes the entry out of the
+/// projection, so its gas returns to the FIFO lots it came from on its own.
+Future<String?> confirmDelete(BuildContext context, String message) =>
+    confirmReason(context, message, fallback: 'Deleted');
 
 class _ReasonDialog extends StatefulWidget {
   final String message, confirm;
   final String? initial;
+
+  /// When set, the reason may be left empty and this is returned instead.
+  final String? fallback;
   const _ReasonDialog({
     required this.message,
     required this.confirm,
     this.initial,
+    this.fallback,
   });
   @override
   State<_ReasonDialog> createState() => _ReasonDialogState();
@@ -879,8 +894,13 @@ class _ReasonDialogState extends State<_ReasonDialog> {
     super.dispose();
   }
 
+  bool get _ready =>
+      field.text.trim().isNotEmpty || widget.fallback != null;
+
   void _done() {
-    if (field.text.trim().isNotEmpty) Navigator.pop(context, field.text.trim());
+    if (!_ready) return;
+    final text = field.text.trim();
+    Navigator.pop(context, text.isEmpty ? widget.fallback : text);
   }
 
   @override
@@ -901,7 +921,9 @@ class _ReasonDialogState extends State<_ReasonDialog> {
             controller: field,
             autofocus: true,
             decoration: InputDecoration(
-              labelText: context.t('Wajah (zaroori)'),
+              labelText: context.t(
+                widget.fallback == null ? 'Wajah (zaroori)' : 'Wajah (optional)',
+              ),
             ),
             onChanged: (_) => setState(() {}),
             onSubmitted: (_) => _done(),
@@ -916,7 +938,7 @@ class _ReasonDialogState extends State<_ReasonDialog> {
       ),
       FilledButton(
         style: FilledButton.styleFrom(backgroundColor: rozRed),
-        onPressed: field.text.trim().isEmpty ? null : _done,
+        onPressed: _ready ? _done : null,
         child: Text(context.t(widget.confirm)),
       ),
     ],

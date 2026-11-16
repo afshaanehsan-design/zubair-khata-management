@@ -1095,11 +1095,10 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         final id = target.contains(':')
             ? target.substring(target.indexOf(':') + 1)
             : d.party;
-        final label = context.t(
-          isOpeningBalance(d) ? 'Opening balance' : 'Adjustment',
-        );
+        final label = context.t(adjustmentLabel(d));
         title = target == 'money:cash'
-            ? '$label — ${context.t('Cash')}'
+            // "Cash kam" and "Cash zyada" already name the cash.
+            ? (isOpeningBalance(d) ? '$label — ${context.t('Cash')}' : label)
             : '$label — ${target.startsWith('money:') ? _accountName(id) : app.name(id)} (${context.t(kind)})';
         final shown = target.startsWith('ap:')
             ? -d.value('amount')
@@ -1791,7 +1790,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       RozForm.opening || null => 'Yeh entry delete karein?',
       _ => 'Yeh Kharcha entry delete karein?',
     };
-    final reason = await confirmReason(context, message);
+    final reason = await confirmDelete(context, message);
     if (reason == null || !mounted) return;
     if (formKey.currentState?.editing?.id == d.id) {
       formKey.currentState?.cancelEdit();

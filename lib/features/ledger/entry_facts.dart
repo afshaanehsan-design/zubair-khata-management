@@ -3,7 +3,7 @@ import '../../core/l10n.dart';
 import '../../core/models.dart';
 import '../reports/reports.dart' show kg, money;
 import 'book.dart';
-import 'roznamcha.dart' show RozForm, isOpeningBalance, rozFormOf, rozNote;
+import 'roznamcha.dart' show RozForm, adjustmentLabel, rozFormOf, rozNote;
 
 // Plain-language description of one entry, shared by the details dialog, the
 // entry lists and the review of pending changes. It only reads documents and
@@ -83,7 +83,7 @@ int _cylinderCount(Document d) => [
 String entryTypeLabel(Document d, Words t) {
   if (d.type == EntryType.sale && d.purchaseShare) return t('Purchase share');
   if (d.type == EntryType.adjustment) {
-    return t(isOpeningBalance(d) ? 'Opening balance' : 'Adjustment');
+    return t(adjustmentLabel(d));
   }
   if (d.type == EntryType.receipt && d.data['supplierRefund'] == true) {
     return t('Supplier refund');

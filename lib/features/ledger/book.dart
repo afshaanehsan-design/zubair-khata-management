@@ -258,6 +258,13 @@ class Book {
   int partyBalance(String party) => receivable(party) - payable(party);
   int deposits(String party) => -balance('deposit:$party');
   int money(String account) => balance('money:$account');
+
+  /// The money in every bank account together (the Money page's Total bank):
+  /// every money account but cash, archived ones included, so the total for
+  /// an earlier day counts an account archived since.
+  int get bankMoney => balances.entries
+      .where((e) => e.key.startsWith('money:') && e.key != 'money:cash')
+      .fold(0, (v, e) => v + e.value);
   int get receivables => records
       .where((r) => r.kind == 'party')
       .fold(0, (v, p) => v + (receivable(p.id) > 0 ? receivable(p.id) : 0));

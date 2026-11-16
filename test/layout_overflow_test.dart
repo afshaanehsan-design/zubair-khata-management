@@ -19,6 +19,7 @@ import 'package:zubair_khata_management/ui/app.dart';
 import 'package:zubair_khata_management/ui/components.dart';
 import 'package:zubair_khata_management/ui/details.dart';
 import 'package:zubair_khata_management/ui/entry_composer.dart';
+import 'package:zubair_khata_management/ui/export_ui.dart';
 import 'package:zubair_khata_management/ui/masters.dart';
 import 'package:zubair_khata_management/ui/opening_balance.dart';
 import 'package:zubair_khata_management/ui/organizations_ui.dart';
@@ -434,6 +435,39 @@ void main() {
               '$tag · Day history',
               (c) => unawaited(showHistory(c, app)),
             );
+            // The PDF preview's title bar and size slider (the PDF itself is
+            // built in the background, which a widget test cannot wait for).
+            for (final (label, size) in [
+              (null, 150.0),
+              ('Compact', 100.0),
+              ('Details', 50.0),
+            ]) {
+              await dialog(
+                '$tag · PDF preview (${label ?? 'no switch'}, $size%)',
+                (c) => unawaited(
+                  showDialog<void>(
+                    context: c,
+                    builder: (ctx) => Dialog.fullscreen(
+                      child: Scaffold(
+                        appBar: pdfPreviewBar(
+                          ctx,
+                          title:
+                              '${ctx.t('Cash and bank statement')} — ${longName.name}',
+                          switchLabel: label,
+                          compact: true,
+                          onCompact: (_) {},
+                          size: size,
+                          onSliding: (_) {},
+                          onSize: (_) {},
+                          onClose: () {},
+                        ),
+                        body: const SizedBox.expand(),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
             app.owner = 'layout-check'; // adds the "cloud copy" warning line
             await dialog(
               '$tag · Reset all data',

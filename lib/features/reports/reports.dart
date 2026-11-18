@@ -69,11 +69,15 @@ class Report {
   final List<RozSheet> sheets;
   final bool compact;
 
+  /// Rebuild the Reports page's daily view, including its table and exports.
+  /// Other report entry points can retain their sheet-only preview switch.
+  final Report Function(bool)? compactView;
+
   /// Rebuild only the printed sheets when switching the PDF preview mode.
   final List<RozSheet> Function(bool)? roznamchaSheets;
 
-  /// What the PDF preview calls the switch that sets [compact]: Compact for
-  /// the Roznamcha, Details for the day's pending balances.
+  /// The PDF preview switch: Compact for daily report views and Roznamcha
+  /// sheets, Details for the day's pending balances.
   final String sheetSwitch;
 
   /// Which report this is, in English whatever the language ('Party
@@ -93,28 +97,32 @@ class Report {
     this.flex = const [],
     this.sheets = const [],
     this.compact = false,
+    this.compactView,
     this.roznamchaSheets,
     this.sheetSwitch = 'Compact',
     this.kind = '',
   });
 
-  Report withCompact(bool value) => Report(
-    title: title,
-    business: business,
-    subtitle: subtitle,
-    columns: columns,
-    rows: rows,
-    notes: notes,
-    urdu: urdu,
-    sections: sections,
-    grids: grids,
-    flex: flex,
-    sheets: roznamchaSheets?.call(value) ?? sheets,
-    compact: value,
-    roznamchaSheets: roznamchaSheets,
-    sheetSwitch: sheetSwitch,
-    kind: kind,
-  );
+  Report withCompact(bool value) =>
+      compactView?.call(value) ??
+      Report(
+        title: title,
+        business: business,
+        subtitle: subtitle,
+        columns: columns,
+        rows: rows,
+        notes: notes,
+        urdu: urdu,
+        sections: sections,
+        grids: grids,
+        flex: flex,
+        sheets: roznamchaSheets?.call(value) ?? sheets,
+        compact: value,
+        compactView: compactView,
+        roznamchaSheets: roznamchaSheets,
+        sheetSwitch: sheetSwitch,
+        kind: kind,
+      );
 }
 
 const reportNames = [
@@ -154,6 +162,11 @@ Report buildReport(
   List<String> columns = [];
   final rows = <List<Cell>>[];
   final notes = <String>[];
+  if (book.documents.any((d) => d.isDraft)) {
+    notes.add(
+      t('Totals include saved drafts. Missing values are not counted.'),
+    );
+  }
   final sections = <int>{};
   final sheets = <RozSheet>[];
   List<RozSheet> Function(bool)? roznamchaSheets;
@@ -302,9 +315,7 @@ Report buildReport(
           SheetFigure(t('Opening'), owedRs(s.start)),
           SheetFigure(t('Debit'), rs(s.debit)),
           SheetFigure(t('Credit'), rs(s.credit)),
-          SheetFigure(t('Balance'), owedRs(s.end), [
-            entries(s.entries.length),
-          ]),
+          SheetFigure(t('Balance'), owedRs(s.end), [entries(s.entries.length)]),
           if (deposit.rows.isNotEmpty || book.deposits(party ?? '') != 0)
             SheetFigure(
               t('Refundable deposit'),
@@ -443,7 +454,8 @@ Report buildReport(
       figures.addAll([
         SheetFigure(t('Cylinder billing'), rs(range[0])),
         SheetFigure(t('Extra-KG billing'), rs(range[1])),
-        if (range[2] != 0) SheetFigure(t('Purchase share amount'), rs(range[2])),
+        if (range[2] != 0)
+          SheetFigure(t('Purchase share amount'), rs(range[2])),
         SheetFigure(t('Cash'), rs(range[3])),
         SheetFigure(t('Bank'), rs(range[4])),
         if (range[5] != 0) SheetFigure(t('Direct to party'), rs(range[5])),
@@ -851,8 +863,15 @@ Report buildReport(
     case 'Audit trail':
       columns = ['Date', 'Reference', 'Description', 'Note / reason'];
       final remoteIds = <String>{};
+      bool inRange(String value) {
+        final instant = DateTime.tryParse(value);
+        if (instant == null) return false;
+        final date = businessDate(instant);
+        return date.compareTo(from) >= 0 && date.compareTo(to) <= 0;
+      }
       for (final a in app.ofKind('audit')) {
         remoteIds.add('${a.data['command_id']}');
+        if (!inRange('${a.data['receivedAt']}')) continue;
         add([
           a.data['receivedAt'],
           a.data['command_id'],
@@ -862,12 +881,10 @@ Report buildReport(
       }
       for (final c in app.commands) {
         if (remoteIds.contains(c.id)) continue;
-        add([
-          DateTime.fromMicrosecondsSinceEpoch(c.created).toIso8601String(),
-          c.id,
-          '${c.action} · ${c.status}',
-          c.reason,
-        ]);
+        final date = DateTime.fromMicrosecondsSinceEpoch(c.created)
+            .toIso8601String();
+        if (!inRange(date)) continue;
+        add([date, c.id, '${c.action} · ${c.status}', c.reason]);
       }
     case 'Daily roznamcha':
       // Printed like the original page: the day's overview (the page's
@@ -1052,10 +1069,7 @@ Report buildReport(
           add([
             date,
             d.reference,
-            join([
-              t(adjustmentLabel(d)),
-              rozNote(d),
-            ]),
+            join([t(adjustmentLabel(d)), rozNote(d)]),
             app.name(id),
             Cell.amount(
               target.startsWith('ap:') ? -d.value('amount') : d.value('amount'),
@@ -1354,6 +1368,14 @@ _Statement _statement(
   final groups = <String, (int, int)>{};
   for (final p in book.postings) {
     if (!accounts.contains(p.account)) continue;
+    // A set-off moves money between the two sides of one khata: nothing
+    // to show when both sides are in this statement.
+    if (p.setOff &&
+        accounts.contains(
+          '${p.account.startsWith('ar:') ? 'ap:' : 'ar:'}${p.account.substring(3)}',
+        )) {
+      continue;
+    }
     if (p.date.compareTo(from) < 0) {
       opening += p.debit;
       continue;
@@ -1522,7 +1544,8 @@ Report pendingReport(
   final moved = <String, (int, int)>{};
   if (changedOn != null) {
     for (final p in book.postings) {
-      if (p.date != changedOn) continue;
+      // A set-off changes no khata (it moves between its two sides).
+      if (p.date != changedOn || p.setOff) continue;
       if (!p.account.startsWith('ar:') && !p.account.startsWith('ap:')) {
         continue;
       }
@@ -1800,7 +1823,13 @@ Report moneyReport(AppController app, String date, {bool urdu = false}) {
               bank(a).isEmpty
                   ? SheetCell.text('—')
                   : SheetCell([
-                      [SheetRun(bank(a).toUpperCase(), bold: true, small: true)],
+                      [
+                        SheetRun(
+                          bank(a).toUpperCase(),
+                          bold: true,
+                          small: true,
+                        ),
+                      ],
                     ]),
               amount(v.opening),
               amount(v.moneyIn, dash: true),
@@ -1920,13 +1949,14 @@ Report invoiceReport(AppController app, Document d, {bool urdu = false}) {
       }
     }
   }
-  final kind = t(
+  var kind = t(
     d.type == EntryType.creditNote
         ? 'Credit note'
         : d.purchaseShare
         ? 'Purchase share'
         : 'Invoice / receipt',
   );
+  if (d.isDraft) kind = '${t('Draft')} · $kind';
   final columns = [
     'Description',
     'Quantity',
@@ -1998,10 +2028,7 @@ Report invoiceReport(AppController app, Document d, {bool urdu = false}) {
               '${t('Bank')} ${money(d.bankIn)}',
               if (d.direct > 0) '${t('Direct')} ${money(d.direct)}',
             ]),
-            SheetFigure(
-              t('Outstanding'),
-              rs(app.book.invoiceDue[d.id] ?? 0),
-            ),
+            SheetFigure(t('Outstanding'), rs(app.book.invoiceDue[d.id] ?? 0)),
           ]
         : [
             SheetFigure(

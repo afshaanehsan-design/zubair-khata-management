@@ -81,6 +81,11 @@ int _cylinderCount(Document d) => [
 /// What kind of entry this is, in words ("Opening balance" rather than the
 /// bookkeeping type "adjustment").
 String entryTypeLabel(Document d, Words t) {
+  final label = _entryTypeLabel(d, t);
+  return d.isDraft ? '${t('Draft')} · $label' : label;
+}
+
+String _entryTypeLabel(Document d, Words t) {
   if (d.type == EntryType.sale && d.purchaseShare) return t('Purchase share');
   if (d.type == EntryType.adjustment) {
     return t(adjustmentLabel(d));
@@ -287,6 +292,7 @@ String entryAmountLabel(Document d, Words t) =>
       });
 
 EntryStatus? entryStatus(AppController app, Document d, Words t) {
+  if (d.isDraft) return EntryStatus(t('Draft'), true);
   if (d.voided) return EntryStatus(t('Voided'), true);
   if (d.type == EntryType.sale) {
     final due = app.book.invoiceDue[d.id] ?? 0;
@@ -295,13 +301,20 @@ EntryStatus? entryStatus(AppController app, Document d, Words t) {
         : EntryStatus(t('Paid'), false);
   }
   if (d.type == EntryType.purchase) {
-    final owed = d.purchaseBill - d.value('amount');
+    final setOff = setOffFor(app.book, d);
+    final owed = d.purchaseBill - d.value('amount') - setOff;
     return owed > 0
         ? EntryStatus('${t('You owe')} ${rs(owed)}', true)
-        : EntryStatus(t('Paid'), false);
+        : EntryStatus(t(setOff > 0 ? 'Set off' : 'Paid'), false);
   }
   return null;
 }
+
+/// What [d] took off what its own party owed you, setting it off against
+/// what [d] made you owe the party ([Book.setOffs]); 0 when nothing was.
+int setOffFor(Book book, Document d) => (book.setOffs[d.id] ?? const [])
+    .where((s) => s.$1 == d.party && s.$2 > 0)
+    .fold(0, (v, s) => v + s.$2);
 
 /// The bill of a sale or credit note, line by line. [shareFrom] names the
 /// purchase a share's bulk came from (see [AppController.shareSource]).
@@ -399,57 +412,75 @@ List<String> paymentNotes(AppController app, Document d, Words t) {
 }
 
 /// Later (or earlier, if kept as advance) payments, credits and discounts
-/// applied to this bill. What was taken with the sale itself is left out: the
-/// Payment card shows it.
+/// applied to this bill, and what the party's other side set off against it
+/// ([Book.setOffAllocations], e.g. a purchase from the same party). What was
+/// taken with the sale itself is left out: the Payment card shows it.
 List<Fact> billPayments(AppController app, Document d, Words t) {
   if (d.type != EntryType.sale || d.voided) return [];
   final book = app.book;
   final position = {
     for (var i = 0; i < book.documents.length; i++) book.documents[i].id: i,
   };
-  final paid = <String, int>{};
-  for (final e in book.receiptAllocations.entries) {
-    if (e.key == d.id) continue;
-    for (final (claim, amount) in e.value) {
-      if (claim == d.id) {
-        paid.update(e.key, (v) => v + amount, ifAbsent: () => amount);
+  final paid = <String, int>{}, setOff = <String, int>{};
+  for (final (allocations, into) in [
+    (book.receiptAllocations, paid),
+    (book.setOffAllocations, setOff),
+  ]) {
+    for (final e in allocations.entries) {
+      // A sale's own set-off is not on its Payment card, so it is listed.
+      if (e.key == d.id && identical(into, paid)) continue;
+      for (final (claim, amount) in e.value) {
+        if (claim == d.id) {
+          into.update(e.key, (v) => v + amount, ifAbsent: () => amount);
+        }
       }
     }
   }
-  final sources = paid.keys.where(position.containsKey).toList()
-    ..sort((a, b) => position[a]!.compareTo(position[b]!));
+  final sources =
+      [
+          for (final id in paid.keys) (id, false),
+          for (final id in setOff.keys) (id, true),
+        ].where((s) => position.containsKey(s.$1)).toList()
+        ..sort((a, b) => position[a.$1]!.compareTo(position[b.$1]!));
   return [
-    for (final id in sources)
+    for (final (id, isSetOff) in sources)
       Fact(
         _join([
+          if (isSetOff) t('Set off'),
           entryTypeLabel(book.documents[position[id]!], t),
           book.documents[position[id]!].date,
           book.documents[position[id]!].reference,
         ]),
-        rs(paid[id]!),
+        rs(isSetOff ? setOff[id]! : paid[id]!),
         openId: id,
       ),
   ];
 }
 
-/// The other bills this entry's money was applied to.
+/// The other bills this entry's money was applied to, and those it set off
+/// against the party's other side.
 List<Fact> appliedFacts(AppController app, Document d, Words t) {
   if (d.voided) return [];
   return [
-    for (final (claim, amount)
-        in app.book.receiptAllocations[d.id] ?? const <(String, int)>[])
-      if (claim != d.id)
-        Fact(
-          app.record(claim) == null
-              ? claim
-              : _join([
-                  entryTypeLabel(Document(app.record(claim)!), t),
-                  Document(app.record(claim)!).date,
-                  Document(app.record(claim)!).reference,
-                ]),
-          rs(amount),
-          openId: claim,
-        ),
+    for (final (allocations, isSetOff) in [
+      (app.book.receiptAllocations, false),
+      (app.book.setOffAllocations, true),
+    ])
+      for (final (claim, amount)
+          in allocations[d.id] ?? const <(String, int)>[])
+        if (claim != d.id)
+          Fact(
+            app.record(claim) == null
+                ? claim
+                : _join([
+                    if (isSetOff) t('Set off'),
+                    entryTypeLabel(Document(app.record(claim)!), t),
+                    Document(app.record(claim)!).date,
+                    Document(app.record(claim)!).reference,
+                  ]),
+            rs(amount),
+            openId: claim,
+          ),
   ];
 }
 
@@ -487,7 +518,7 @@ List<Fact> detailFacts(AppController app, Document d, Words t) {
       add('Category', _text(d, 'category'));
       add('Paid from', account);
     case EntryType.purchase:
-      final owed = d.purchaseBill - d.value('amount');
+      final owed = d.purchaseBill - d.value('amount') - setOffFor(app.book, d);
       add('Weight (KG)', kg(d.value('grams')));
       add('Rate', '${rs(d.rate)} ${_rateUnit(d, t)}');
       add('Purchase bill', rs(d.purchaseBill));
@@ -532,6 +563,22 @@ List<Fact> detailFacts(AppController app, Document d, Words t) {
       add('Weight (KG)', kg(d.value('grams')));
     case EntryType.discount:
       break;
+  }
+  // The party's two sides set off against each other by this entry.
+  if (!d.voided) {
+    for (final (party, amount)
+        in app.book.setOffs[d.id] ?? const <(String, int)>[]) {
+      out.add(
+        Fact(
+          t(
+            amount > 0
+                ? 'Set off against what {name} owes you'
+                : 'Set off against the advance from {name}',
+          ).replaceAll('{name}', app.name(party)),
+          rs(amount.abs()),
+        ),
+      );
+    }
   }
   add('Note / reason', rozNote(d));
   return out;
@@ -584,7 +631,9 @@ Map<String, int> partyBalances(Book book, String party) {
 
 /// What a party owes you and what you owe the party, both never negative.
 /// A customer's advance counts as "pay"; an overpaid company as "receive".
-/// Matches the "You will pay" side of [Book.payables].
+/// Matches the "You will pay" side of [Book.payables]. The book sets a
+/// party's two sides off against each other ([Book.setOffs]), so at most one
+/// of the two is above zero.
 ({int receive, int pay}) partyOwed(Book book, String party) {
   final receivable = book.receivable(party), payable = book.payable(party);
   return (

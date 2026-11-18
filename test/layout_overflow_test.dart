@@ -332,6 +332,58 @@ void main() {
           'Muhammad Abdul Rehman Traders and Sons Gas Agency',
         )!;
         final usman = app.partyByName('استاد عثمان صاحب لاہور والے')!;
+        // Saved drafts for the Drafts tab: a long sale still missing its
+        // rate, a kharcha, and a purchase from the composer.
+        final longDraft = await app.saveEntryDraft(
+          source: EntryDraft.roznamcha,
+          tab: 'aamad',
+          date: app.selectedDate,
+          data: {
+            'party': longName.name,
+            'vehicle': '92',
+            'q11800': '12',
+            'q15000': '3',
+            'q45000': '2',
+            'bulk': '1234.5',
+            'bulkAtCost': false,
+            'cash': '1234567',
+            'bank': '7654321',
+            'bankDirect': true,
+            'directParty': usman.name,
+            'extraBanks': [
+              {
+                'amount': '12345678',
+                'account': '',
+                'direct': true,
+                'company': usman.name,
+                'bankName': 'United Bank Limited Main Branch',
+              },
+            ],
+            'note': 'Parchi 92 aur 93, baqi raqam agle hafte United Bank se',
+          },
+          missing: 'Rate likhein (11.8 KG ka)',
+        );
+        await app.saveEntryDraft(
+          source: EntryDraft.roznamcha,
+          tab: 'kharcha',
+          date: app.selectedDate,
+          data: {'kind': 'company', 'party': usman.name, 'amount': '9876543'},
+          missing: 'Bank / account chunein',
+        );
+        final purchaseDraft = await app.saveEntryDraft(
+          source: EntryDraft.composer,
+          tab: 'purchase',
+          date: app.selectedDate,
+          data: {
+            'type': 'purchase',
+            'date': app.selectedDate,
+            'party': longName.id,
+            'grams': 15000000,
+            'rate': 25000,
+            'rateUnit': 1000,
+          },
+          missing: 'Enter a valid number',
+        );
 
         for (final language in ['en', 'ur']) {
           await app.setLanguage(language);
@@ -514,6 +566,34 @@ void main() {
                 (c) => unawaited(openRoznamchaForm(c, app, tab: t)),
               );
             }
+            // The Drafts tab, a saved draft open in the form (its banner
+            // and Cancel), and a composer draft.
+            await dialog(
+              '$tag · Naya entry: Drafts tab',
+              (c) => unawaited(openRoznamchaForm(c, app, showDrafts: true)),
+            );
+            app.rozDrafts['dialog:open'] = {
+              ...longDraft.data,
+              'draftId': longDraft.id,
+              'draftTab': longDraft.tab,
+            };
+            await dialog(
+              '$tag · Naya entry: a draft open',
+              (c) => unawaited(openRoznamchaForm(c, app)),
+            );
+            app.rozDrafts.remove('dialog:open');
+            await dialog(
+              '$tag · Composer: a purchase draft open',
+              (c) => unawaited(
+                composeEntry(
+                  c,
+                  app,
+                  type: EntryType.purchase,
+                  draft: purchaseDraft,
+                ),
+              ),
+            );
+            app.composerDrafts.remove('saved:${purchaseDraft.id}');
             for (final type in [
               EntryType.sale,
               EntryType.purchase,

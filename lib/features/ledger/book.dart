@@ -20,7 +20,18 @@ class Posting {
   final String date;
   final String account;
   final int debit;
-  const Posting(this.document, this.date, this.account, this.debit);
+
+  /// One of the pair that sets a party's two sides off against each other
+  /// (see [Book.setOffs]). The pair adds nothing to the party's khata
+  /// (`ar:` + `ap:`), so a khata statement leaves it out.
+  final bool setOff;
+  const Posting(
+    this.document,
+    this.date,
+    this.account,
+    this.debit, {
+    this.setOff = false,
+  });
 }
 
 class FifoAllocation {
@@ -58,6 +69,23 @@ class Book {
   final Map<String, int> full = {}, empty = {}, held = {};
   final Map<String, int> invoiceDue = {};
   final Map<String, List<(String, int)>> receiptAllocations = {};
+
+  /// What each document set off between a party's two sides: document id →
+  /// (party, amount), the amount taken off what the party owes you (`ar:`)
+  /// and off what you owe it (`ap:`); negative when both went the other way
+  /// (an advance on `ar:` against an overpaid `ap:`). After every document
+  /// a party is owed on one side only, so a purchase from a customer who
+  /// owes you lowers what he owes (asked for by the user on 17 November
+  /// 2026). The server does the same in `khata_private.rebuild`.
+  final Map<String, List<(String, int)>> setOffs = {};
+
+  /// The bills a set-off settled, like [receiptAllocations]: document id →
+  /// (invoice, amount).
+  final Map<String, List<(String, int)>> setOffAllocations = {};
+
+  /// Each party's `ar:` and `ap:` balance so far while documents are replayed.
+  final Map<String, (int, int)> _sides = {};
+
   /// Grams of each document without a known cost: taken from a lot whose
   /// cost is unknown, or still waiting for stock (see [shortageGrams]).
   final Map<String, int> uncostedSales = {};
@@ -93,9 +121,8 @@ class Book {
   static int _order(Document a, Document b) {
     final date = a.date.compareTo(b.date);
     if (date != 0) return date;
-    final time = integer(
-      a.data['occurredAt'],
-    ).compareTo(integer(b.data['occurredAt']));
+    final time = integer(a.data['occurredAt'])
+        .compareTo(integer(b.data['occurredAt']));
     return time != 0 ? time : a.id.compareTo(b.id);
   }
 
@@ -118,7 +145,9 @@ class Book {
     );
     _reserveShares(live);
     for (final d in documents) {
+      final start = postings.length;
       _project(d);
+      _setOff(d, start);
     }
     // After every document: a share may take its stock from a later purchase.
     for (final id in verifyShares) {
@@ -208,6 +237,9 @@ class Book {
       if (purchase == null) {
         throw const FormatException('Choose a purchase to share from');
       }
+      if (purchase.isDraft && purchase.rate == 0) {
+        throw const FormatException('Enter stock cost');
+      }
       if ((shareExcess[d.id] ?? 0) > 0) {
         throw const FormatException('Shared KG exceed the selected purchase');
       }
@@ -232,10 +264,7 @@ class Book {
           .where((e) => e.value.id == purchase.id && e.key != except)
           .fold(
             0,
-            (v, e) =>
-                v +
-                (_reserved[e.key] ?? 0) +
-                (shareExcess[e.key] ?? 0),
+            (v, e) => v + (_reserved[e.key] ?? 0) + (shareExcess[e.key] ?? 0),
           );
 
   void _line(Document d, String account, int debit) {
@@ -245,6 +274,44 @@ class Book {
   void _pair(Document d, String debit, String credit, int amount) {
     _line(d, debit, amount);
     _line(d, credit, -amount);
+  }
+
+  /// After [d] (whose postings start at [start]): every party whose two
+  /// sides now point opposite ways, owing you on one and owed by you on the
+  /// other, has the smaller set off against the larger, under [d] and on
+  /// its date. The khata balance (`ar:` + `ap:`) does not change; only one
+  /// side is left. Postings of other documents made while [d] was replayed
+  /// (FIFO cost of gas that waited) never touch a party account.
+  void _setOff(Document d, int start) {
+    final moved = <String, (int, int)>{};
+    for (final p in postings.skip(start)) {
+      if (p.document != d.id) continue;
+      final receivable = p.account.startsWith('ar:');
+      if (!receivable && !p.account.startsWith('ap:')) continue;
+      final party = p.account.substring(3);
+      final (ar, ap) = moved[party] ?? (0, 0);
+      moved[party] = receivable ? (ar + p.debit, ap) : (ar, ap + p.debit);
+    }
+    for (final MapEntry(key: party, value: (ar, ap)) in moved.entries) {
+      var (receivable, payable) = _sides[party] ?? (0, 0);
+      receivable += ar;
+      payable += ap;
+      // `payable` is the `ap:` balance itself: negative when you owe.
+      final amount = receivable > 0 && payable < 0
+          ? (receivable < -payable ? receivable : -payable)
+          : receivable < 0 && payable > 0
+          ? -(-receivable < payable ? -receivable : payable)
+          : 0;
+      if (amount != 0) {
+        postings
+          ..add(Posting(d.id, d.date, 'ap:$party', amount, setOff: true))
+          ..add(Posting(d.id, d.date, 'ar:$party', -amount, setOff: true));
+        setOffs.putIfAbsent(d.id, () => []).add((party, amount));
+        receivable -= amount;
+        payable += amount;
+      }
+      _sides[party] = (receivable, payable);
+    }
   }
 
   int balance(String account) => balances[account] ?? 0;
@@ -279,6 +346,7 @@ class Book {
       );
   int get grossProfit => cylinderSales + extraBilling - costOfSales;
   bool get profitIncomplete =>
+      documents.any((d) => d.isDraft) ||
       uncostedSales.isNotEmpty ||
       lots.any((l) => l.cost == null && l.grams > 0) ||
       documents.any((d) => d.type == EntryType.historicalSale);
@@ -299,7 +367,9 @@ class Book {
     int grams,
     int cost,
   ) {
-    allocations.add(FifoAllocation(d.id, lot.id, grams, cost, account: account));
+    allocations.add(
+      FifoAllocation(d.id, lot.id, grams, cost, account: account),
+    );
     // A stock loss is an expense (posted below), not a cost of sales.
     final loss = d.type == EntryType.stockAdjustment;
     if (!loss && account == 'cogs') costOfSales += cost;
@@ -524,7 +594,10 @@ class Book {
         _stockIn(
           d,
           d.value('grams') - shares.fold(0, (v, s) => v + _reserved[s]!),
-          d.purchaseBill - shares.fold(0, (v, s) => v + _reservedCost[s]!),
+          d.isDraft && d.rate == 0
+              ? null
+              : d.purchaseBill -
+                    shares.fold(0, (v, s) => v + _reservedCost[s]!),
         );
         final lot = _lotOf[d.id] = lots.last;
         for (final share in _waitingFor.remove(d.id) ?? const <Document>[]) {
@@ -614,7 +687,8 @@ class Book {
           });
           shortageGrams -= cancelled;
           // What is left uncosted came from stock of unknown cost.
-          if (uncostedSales.containsKey(original.id)) {
+          final unknownCost = uncostedSales.containsKey(original.id);
+          if (unknownCost && !documents.any((d) => d.isDraft)) {
             throw const FormatException(
               'Record the missing purchase cost before returning stock',
             );
@@ -625,7 +699,11 @@ class Book {
           costOfSales -= cost - sharedCost;
           gasGrams += original.saleGrams;
           if (original.saleGrams > cancelled) {
-            _stockIn(d, original.saleGrams - cancelled, cost);
+            _stockIn(
+              d,
+              original.saleGrams - cancelled,
+              unknownCost ? null : cost,
+            );
           }
         } else if (original.bulkAtCost) {
           // The charge is cancelled but the shared gas is gone: like any
@@ -650,11 +728,13 @@ class Book {
         invoices = <String>{};
     // Each party's advances that still have money left, oldest first.
     final credits = <String, List<_Credit>>{};
-    void reduce(String claim, int amount, String source) {
+    void reduce(String claim, int amount, String source, bool setOff) {
       due[claim] = due[claim]! - amount;
       if (invoices.contains(claim)) {
         invoiceDue[claim] = due[claim]!;
-        receiptAllocations.putIfAbsent(source, () => []).add((claim, amount));
+        (setOff ? setOffAllocations : receiptAllocations)
+            .putIfAbsent(source, () => [])
+            .add((claim, amount));
       }
     }
 
@@ -671,7 +751,7 @@ class Book {
       for (final credit in open) {
         final used = credit.remaining < due[id]! ? credit.remaining : due[id]!;
         if (used > 0) {
-          reduce(id, used, credit.source);
+          reduce(id, used, credit.source, credit.setOff);
           credit.remaining -= used;
         }
       }
@@ -684,6 +764,7 @@ class Book {
       int amount, {
       Map? manual,
       String? preferred,
+      bool setOff = false,
     }) {
       var remaining = amount;
       void settle(String id) {
@@ -697,7 +778,7 @@ class Book {
           used = integer(manual[id]);
         }
         if (used > 0) {
-          reduce(id, used, source);
+          reduce(id, used, source, setOff);
           remaining -= used;
         }
       }
@@ -715,16 +796,18 @@ class Book {
         if (list[i] != preferred) settle(list[i]);
       }
       if (remaining > 0) {
-        credits.putIfAbsent(party, () => []).add(_Credit(source, remaining));
+        credits
+            .putIfAbsent(party, () => [])
+            .add(_Credit(source, remaining, setOff: setOff));
       }
     }
 
-    for (final d in documents) {
+    void own(Document d) {
       final target = '${d.data['target'] ?? ''}';
       final party = d.type == EntryType.adjustment && target.startsWith('ar:')
           ? target.substring(3)
           : d.party;
-      if (party.isEmpty) continue;
+      if (party.isEmpty) return;
       if (d.type == EntryType.sale) {
         addClaim(party, d.id, d.total, invoice: true);
       }
@@ -754,6 +837,20 @@ class Book {
       };
       if (amount > 0) {
         applyCredit(party, d.id, amount, manual: d.data['allocations'] as Map?);
+      }
+    }
+
+    for (final d in documents) {
+      own(d);
+      // A set-off pays the party's oldest bills like a collection; one the
+      // other way (an advance used up against an overpaid company) is a
+      // claim like a payment to the customer.
+      for (final (party, amount) in setOffs[d.id] ?? const <(String, int)>[]) {
+        if (amount > 0) {
+          applyCredit(party, d.id, amount, setOff: true);
+        } else {
+          addClaim(party, '${d.id}#set-off:$party', -amount);
+        }
       }
     }
   }
@@ -1131,6 +1228,7 @@ void validateDocument(Document d, List<Record> records) {
 
 class _Credit {
   final String source;
+  final bool setOff;
   int remaining;
-  _Credit(this.source, this.remaining);
+  _Credit(this.source, this.remaining, {this.setOff = false});
 }

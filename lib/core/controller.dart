@@ -10,6 +10,7 @@ import '../data/database.dart';
 import '../data/sync.dart';
 import '../data/secure_auth.dart';
 import '../features/ledger/book.dart';
+import '../features/ledger/draft_projection.dart';
 import 'models.dart';
 import 'organizations.dart';
 
@@ -54,6 +55,12 @@ class AppController extends ChangeNotifier {
   /// entry. Like [rozDrafts] they last until the app or organization closes.
   final composerDrafts = <String, Json>{};
 
+  /// Entries put aside with the Draft button, newest first. Unlike
+  /// [rozDrafts] they are saved on this device (metadata `entry_drafts`),
+  /// so they outlive the app; Reset all data erases them. See
+  /// [saveEntryDraft].
+  final entryDrafts = <EntryDraft>[];
+
   /// Whether the database keeps the copy made just before the last backup
   /// restore or cloud reconnect (metadata `pre_restore`), see
   /// [preRestoreCopy].
@@ -80,6 +87,7 @@ class AppController extends ChangeNotifier {
   String? _refusal;
   bool _disposed = false;
   Book? _book;
+  DraftProjection? _draftProjection;
   final _datedBooks = <String, Book>{};
   final batchStarts = <String, int>{};
   SupabaseClient? client;
@@ -107,11 +115,15 @@ class AppController extends ChangeNotifier {
   bool get cloudLinked => owner != null || signedIn;
   String get syncMessage =>
       sync?.message ?? (cloudConfigured ? 'Sign in to sync' : 'Local device');
-  List<Record> ofKind(String kind, {bool archived = false}) => records
+  List<Record> get accountingRecords => entryDrafts.isEmpty
+      ? records
+      : (_draftProjection ??= DraftProjection(records, entryDrafts)).records;
+
+  List<Record> ofKind(String kind, {bool archived = false}) => accountingRecords
       .where((r) => r.kind == kind && !r.deleted && (archived || !r.archived))
       .toList();
   Record? record(String id) {
-    for (final r in records) {
+    for (final r in accountingRecords) {
       if (r.id == id) return r;
     }
     return null;
@@ -136,7 +148,7 @@ class AppController extends ChangeNotifier {
   /// Whether any live (not voided) entry belongs to this party, or names it
   /// as the party a customer paid directly.
   bool partyHasEntries(String id) =>
-      records.any((r) => _entryOf(r, id) && r.data['voided'] != true);
+      accountingRecords.any((r) => _entryOf(r, id) && r.data['voided'] != true);
 
   static bool _entryOf(Record r, String party) =>
       r.kind == 'document' &&
@@ -159,7 +171,7 @@ class AppController extends ChangeNotifier {
     ]);
   }
 
-  Book get book => _book ??= Book(records);
+  Book get book => _book ??= Book(accountingRecords);
   Book bookAt(String date) {
     // Through the last day that has entries (usually today) it is [book].
     final all = book.documents;
@@ -167,7 +179,7 @@ class AppController extends ChangeNotifier {
     if (_datedBooks.length > 40) _datedBooks.clear();
     return _datedBooks.putIfAbsent(
       date,
-      () => Book(records, throughDate: date),
+      () => Book(accountingRecords, throughDate: date),
     );
   }
 
@@ -191,6 +203,7 @@ class AppController extends ChangeNotifier {
     organizations?.setLanguage(language);
     if (await db.meta('initialized') == null) await _seedDefaults();
     await _loadPdfSizes();
+    await _loadEntryDrafts();
     await reload();
     const envUrl = String.fromEnvironment('SUPABASE_URL');
     const envKey = String.fromEnvironment('SUPABASE_ANON_KEY');
@@ -296,11 +309,16 @@ class AppController extends ChangeNotifier {
         batch('${s.data['date']}', integer(s.data['batchAt']));
       }
     }
+    _invalidateBooks();
+    organizations?.mirror(this);
+    notifyListeners();
+  }
+
+  void _invalidateBooks() {
+    _draftProjection = null;
     _book = null;
     _datedBooks.clear();
     _quoteKey = null;
-    organizations?.mirror(this);
-    notifyListeners();
   }
 
   /// The size, in percent, the PDF of a report of this [kind] last printed at
@@ -335,6 +353,109 @@ class AppController extends ChangeNotifier {
       }
     } catch (_) {
       // A damaged value only loses the remembered sizes.
+    }
+  }
+
+  /// The saved draft with this id, or null when it is gone.
+  EntryDraft? entryDraft(String id) {
+    for (final d in entryDrafts) {
+      if (d.id == id) return d;
+    }
+    return null;
+  }
+
+  /// Puts an entry aside as a draft, complete or not. With the [id] of an
+  /// existing draft it replaces that one (and moves it to the top) instead
+  /// of adding another. Known values count locally even when [missing]
+  /// describes information still needed to post it.
+  Future<EntryDraft> saveEntryDraft({
+    String? id,
+    required String source,
+    required String tab,
+    required String date,
+    required Json data,
+    String missing = '',
+  }) async {
+    final previous = id == null ? null : entryDraft(id);
+    final savedAt = DateTime.now().millisecondsSinceEpoch;
+    if (isClosed(date) || (previous != null && isClosed(previous.date))) {
+      throw StateError('Reopen this day before changing it');
+    }
+    if (source == EntryDraft.composer) {
+      final entry = Document(
+        Record('draft', 'document', {'type': tab, ...data}),
+      );
+      final ids = {entry.party, ...entry.directParties};
+      final parties = {
+        for (final r in accountingRecords)
+          if (r.kind == 'party' &&
+              r.draftId != null &&
+              r.data['unassignedDraft'] != true &&
+              ids.contains(r.id))
+            r.id: r.data,
+      };
+      if (parties.isNotEmpty) data = {...data, 'draftParties': parties};
+    }
+    data = {
+      ...data,
+      'draftOccurredAt':
+          previous?.data['draftOccurredAt'] ??
+          previous?.data['occurredAt'] ??
+          previous?.savedAt ??
+          data['occurredAt'] ??
+          savedAt,
+    };
+    final draft = EntryDraft(
+      id: id ?? uuid.v4(),
+      source: source,
+      tab: tab,
+      date: date,
+      data: data,
+      missing: missing,
+      savedAt: savedAt,
+    );
+    await _storeEntryDrafts([
+      draft,
+      ...entryDrafts.where((d) => d.id != draft.id),
+    ]);
+    return draft;
+  }
+
+  Future<void> deleteEntryDraft(String id) async {
+    final draft = entryDraft(id);
+    if (draft == null) return;
+    if (isClosed(draft.date)) {
+      throw StateError('Reopen this day before changing it');
+    }
+    await _storeEntryDrafts(entryDrafts.where((d) => d.id != id).toList());
+  }
+
+  Future<void> _storeEntryDrafts(List<EntryDraft> next) async {
+    await db.setMeta(
+      'entry_drafts',
+      jsonEncode([for (final d in next) d.toJson()]),
+    );
+    entryDrafts
+      ..clear()
+      ..addAll(next);
+    _invalidateBooks();
+    notifyListeners();
+  }
+
+  Future<void> _loadEntryDrafts() async {
+    _invalidateBooks();
+    entryDrafts.clear();
+    try {
+      final saved = jsonDecode(await db.meta('entry_drafts') ?? '[]');
+      if (saved is! List) return;
+      for (final item in saved) {
+        final draft = EntryDraft.fromJson(item);
+        if (draft != null && entryDraft(draft.id) == null) {
+          entryDrafts.add(draft);
+        }
+      }
+    } catch (_) {
+      // A damaged value only loses the drafts.
     }
   }
 
@@ -464,6 +585,7 @@ class AppController extends ChangeNotifier {
     List<Change> changes, {
     String action = 'save',
     String reason = '',
+    String? finishedDraftId,
   }) async {
     if (changes.isEmpty) return;
     if (['correct', 'void', 'restore', 'close', 'reopen'].contains(action) &&
@@ -472,6 +594,9 @@ class AppController extends ChangeNotifier {
     }
     final next = {for (final r in records) r.id: r};
     for (final c in changes) {
+      if (c.id == 'draft-bank' || c.id.startsWith('draft-party:')) {
+        throw const FormatException('Choose a party and account before saving');
+      }
       final old = next[c.id];
       if (['party', 'account', 'settings'].contains(c.kind) &&
           '${c.data['name'] ?? ''}'.trim().isEmpty) {
@@ -569,7 +694,23 @@ class AppController extends ChangeNotifier {
         .any((r) => projected.deposits(r.id) < 0)) {
       throw const FormatException('Refund exceeds the refundable deposit');
     }
-    await _enqueue(changes, action: action, reason: reason);
+    final remaining = entryDrafts
+        .where((d) => d.id != finishedDraftId)
+        .toList();
+    await db.transaction(() async {
+      await _enqueue(changes, action: action, reason: reason);
+      if (finishedDraftId != null) {
+        await db.setMeta(
+          'entry_drafts',
+          jsonEncode([for (final d in remaining) d.toJson()]),
+        );
+      }
+    });
+    if (finishedDraftId != null) {
+      entryDrafts
+        ..clear()
+        ..addAll(remaining);
+    }
     await reload();
     unawaited(syncNow());
   }
@@ -583,6 +724,9 @@ class AppController extends ChangeNotifier {
     int supplierOpening = 0,
     String? openingDate,
   }) async {
+    if (existing?.draftId != null) {
+      throw StateError('Finish the draft before editing this party or account');
+    }
     final id = existing?.id ?? newId ?? uuid.v4();
     // The day the opening balances are entered on (default: the page's date).
     final openedOn = openingDate == null || openingDate.isEmpty
@@ -645,18 +789,26 @@ class AppController extends ChangeNotifier {
     Json data, {
     Document? replace,
     String id = '~share-quote',
+    String? draftId,
+    bool includeDrafts = true,
   }) {
+    final draftTime = draftId == null
+        ? null
+        : record(draftId)?.data['occurredAt'];
+    if (draftId != null && id == '~share-quote') id = draftId;
     final candidate = <String, dynamic>{
       'type': 'sale',
       'date': selectedDate,
       ...data,
       // A new entry is saved now, after what is already on its date.
-      'occurredAt': data['occurredAt'] ?? 9000000000000,
+      'occurredAt': draftTime ?? data['occurredAt'] ?? 9000000000000,
       'bulkAtCost': true,
       'bulkCost': 0,
     };
     final key = canonicalJson([
       id,
+      draftId,
+      includeDrafts,
       replace?.id,
       candidate['date'],
       candidate['occurredAt'],
@@ -669,7 +821,11 @@ class AppController extends ChangeNotifier {
       _quoteCost = null;
       _quoteError = null;
       try {
-        final current = book, last = current.documents.lastOrNull;
+        final state = includeDrafts ? accountingRecords : records;
+        final current = includeDrafts && draftId == null
+            ? book
+            : Book(state.where((r) => r.id != draftId).toList());
+        final last = current.documents.lastOrNull;
         final entry = Document(Record(id, 'document', candidate));
         final atEnd =
             last == null ||
@@ -700,11 +856,15 @@ class AppController extends ChangeNotifier {
               ? roundRupees(
                   current.quoteAtEnd(entry.cylinderGrams, entry.extraGrams),
                 )
-              : _shareCharges([
-                  for (final r in records)
-                    if (r.id != replace?.id && r.id != id) r,
-                  entry.record,
-                ], {id})[id]!;
+              : _shareCharges(
+                  [
+                    for (final r in state)
+                      if (r.id != replace?.id && r.id != id && r.id != draftId)
+                        r,
+                    entry.record,
+                  ],
+                  {id},
+                )[id]!;
         }
       } catch (e) {
         _quoteError = e;
@@ -766,12 +926,15 @@ class AppController extends ChangeNotifier {
     String date, {
     Document? replace,
     String selected = '',
+    String? draftId,
   }) {
     final day = DateTime.parse(date);
     String shifted(int days) =>
         day.add(Duration(days: days)).toIso8601String().substring(0, 10);
     final from = shifted(-60), to = shifted(7);
-    final current = book;
+    final current = draftId == null
+        ? book
+        : Book(accountingRecords.where((r) => r.id != draftId).toList());
     return [
       for (final p in current.documents.reversed)
         if (p.type == EntryType.purchase &&
@@ -790,25 +953,67 @@ class AppController extends ChangeNotifier {
     Document? replace,
     String reason = '',
     List<Change> before = const [],
+    String? draftId,
   }) async {
+    if (replace?.isDraft == true) {
+      draftId ??= replace!.record.draftId;
+      replace = null;
+    }
+    final draft = draftId == null ? null : entryDraft(draftId);
+    if (draftId != null && (draft == null || replace != null)) {
+      throw StateError('This draft is no longer available');
+    }
+    if (draft != null && isClosed(draft.date)) {
+      throw StateError('Reopen this day before changing it');
+    }
+    final projectedDraft = draftId == null ? null : record(draftId);
     data = cleanDocumentData(data);
     if (replace != null && (replace.voided || isClosed(replace.date))) {
       throw StateError('Reopen this day before correcting the entry');
     }
-    final newId = uuid.v4();
+    final newId = draftId ?? uuid.v4();
     data = {
       ...data,
-      'occurredAt': data['occurredAt'] ?? DateTime.now().millisecondsSinceEpoch,
+      'occurredAt':
+          projectedDraft?.data['occurredAt'] ??
+          data['occurredAt'] ??
+          DateTime.now().millisecondsSinceEpoch,
     };
     if (data['type'] == 'sale' && data['bulkAtCost'] == true) {
-      data['bulkCost'] = quoteBulkCost(data, replace: replace, id: newId);
+      data['bulkCost'] = quoteBulkCost(
+        data,
+        replace: replace,
+        id: newId,
+        includeDrafts: false,
+      );
       if (Document(Record(newId, 'document', data)).purchaseShare) {
         data['rate'] = 0;
       }
     }
+    // A named party first used by a draft is local until an actual entry
+    // needs it. Materialize it atomically with that entry.
+    final masters = <String, Change>{};
+    for (final r in accountingRecords.where(
+      (r) =>
+          r.kind == 'party' &&
+          r.draftId != null &&
+          r.data['unassignedDraft'] != true,
+    )) {
+      final doc = Document(Record(newId, 'document', data));
+      if (r.id == doc.party ||
+          doc.directParties.contains(r.id) ||
+          data['target'] == 'ar:${r.id}' ||
+          data['target'] == 'ap:${r.id}' ||
+          data['target'] == 'deposit:${r.id}') {
+        masters[r.id] = Change(r.id, r.kind, r.data, 0);
+      }
+    }
+    for (final c in before) {
+      masters[c.id] = c;
+    }
     await commit(
       [
-        ...before,
+        ...masters.values,
         if (replace != null)
           Change(replace.id, 'document', {
             ...replace.data,
@@ -823,6 +1028,7 @@ class AppController extends ChangeNotifier {
           'reference':
               replace?.reference ??
               data['reference'] ??
+              projectedDraft?.data['reference'] ??
               nextReference(
                 data['type'] == 'sale'
                     ? 'INV'
@@ -835,10 +1041,15 @@ class AppController extends ChangeNotifier {
       ],
       action: replace == null ? 'save' : 'correct',
       reason: reason,
+      finishedDraftId: draftId,
     );
   }
 
   Future<void> voidDocument(Document doc, String reason) async {
+    if (doc.isDraft) {
+      await deleteEntryDraft(doc.record.draftId!);
+      return;
+    }
     if (reason.trim().isEmpty) {
       throw const FormatException('A reason is required');
     }
@@ -872,7 +1083,7 @@ class AppController extends ChangeNotifier {
   /// time syncs with it.
   Future<void> saveSnapshot({int? batchAt}) async {
     final documents = book.documents
-        .where((d) => d.date == selectedDate)
+        .where((d) => !d.isDraft && d.date == selectedDate)
         .map((d) => d.record.toJson())
         .toList();
     final latest =
@@ -910,7 +1121,7 @@ class AppController extends ChangeNotifier {
         .toList();
     final ids = {for (final r in original) r.id: uuid.v4()};
     final changes = <Change>[];
-    for (final d in book.documents.where((d) => d.date == date)) {
+    for (final d in book.documents.where((d) => !d.isDraft && d.date == date)) {
       changes.add(
         Change(d.id, 'document', {
           ...d.data,
@@ -947,6 +1158,10 @@ class AppController extends ChangeNotifier {
       saveSnapshot(batchAt: DateTime.now().millisecondsSinceEpoch);
 
   Future<void> closeDay({bool reopen = false, required String reason}) async {
+    if (!reopen &&
+        entryDrafts.any((d) => d.date.compareTo(selectedDate) <= 0)) {
+      throw StateError('Finish or delete drafts before closing this day');
+    }
     if (!signedIn) throw StateError('Connect and sign in before closing a day');
     await syncNow();
     if (pendingCount != 0 ||
@@ -985,6 +1200,7 @@ class AppController extends ChangeNotifier {
       // Sales already at this rate need no audited correction.
       (d) =>
           d.date == selectedDate &&
+          !d.isDraft &&
           d.type == EntryType.sale &&
           !d.purchaseShare &&
           d.rate != rate,
@@ -1098,8 +1314,9 @@ class AppController extends ChangeNotifier {
     } catch (_) {}
     rozDrafts.clear();
     composerDrafts.clear();
-    // Its metadata key went with the wipe.
+    // Their metadata keys (`pdf_sizes`, `entry_drafts`) went with the wipe.
     pdfSizes.clear();
+    entryDrafts.clear();
     selectedDate = businessDate();
     lastError = null;
     await reload();
@@ -1211,8 +1428,10 @@ class AppController extends ChangeNotifier {
       await db.restoreLocal(data);
       await db.setMeta('device', device);
       owner = meta['owner'] as String?;
-      // The metadata, the PDF sizes among it, is now the backup's.
+      // The metadata, the PDF sizes and saved drafts among it, is now the
+      // backup's.
       await _loadPdfSizes();
+      await _loadEntryDrafts();
     }
     await db.setMeta('pre_restore', jsonEncode(recovery));
     await reload();

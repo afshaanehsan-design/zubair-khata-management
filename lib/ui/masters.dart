@@ -16,6 +16,13 @@ Future<void> editMaster(
   int payableValue = 0,
   String? openingDate,
 }) async {
+  if (existing?.draftId != null) {
+    showMessage(
+      context,
+      context.t('Finish the draft before editing this party or account'),
+    );
+    return;
+  }
   final initial = proposed ?? existing?.data ?? <String, dynamic>{};
   final fields = {
     for (final key in ['name', 'phone', 'bank', 'category', 'address'])

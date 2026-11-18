@@ -6,6 +6,8 @@ import '../core/models.dart';
 import '../features/ledger/roznamcha.dart';
 import '../features/reports/reports.dart';
 import 'components.dart';
+import 'drafts.dart';
+import 'entry_composer.dart' show composeEntry;
 import 'roznamcha_widgets.dart';
 
 /// The "Naya Entry" tabs of the original Roznamcha page, in the same order.
@@ -95,18 +97,23 @@ bool rozEditable(Document d) {
 /// Opens the Roznamcha entry form in a dialog (or a sheet on phones). With
 /// [party] the form belongs to that party's khata: the name stays on every
 /// tab, and the Kharcha tab starts on the type that pays that party.
+/// [showDrafts] opens it on the Drafts tab.
 Future<void> openRoznamchaForm(
   BuildContext context,
   AppController app, {
   RozTab tab = RozTab.aamad,
   String? party,
   Document? replace,
+  bool showDrafts = false,
+  EntryDraft? draft,
 }) async {
   Widget form() => RoznamchaForm(
     app: app,
     initialTab: tab,
     initialParty: party,
     replace: replace,
+    initialDrafts: showDrafts,
+    initialDraft: draft,
     dialog: true,
   );
   if (MediaQuery.sizeOf(context).width < 700) {
@@ -164,12 +171,18 @@ class RoznamchaForm extends StatefulWidget {
   final String? initialParty;
   final Document? replace;
   final bool dialog;
+
+  /// Starts on the Drafts tab (the saved drafts) instead of a form.
+  final bool initialDrafts;
+  final EntryDraft? initialDraft;
   const RoznamchaForm({
     required this.app,
     this.initialTab = RozTab.aamad,
     this.initialParty,
     this.replace,
     this.dialog = false,
+    this.initialDrafts = false,
+    this.initialDraft,
     super.key,
   });
   @override
@@ -266,6 +279,13 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   Json? allocations;
   final returnedEdited = <int, bool>{};
   Document? editing;
+
+  /// The saved draft ([AppController.entryDrafts]) loaded into the form, if
+  /// any. Add turns it into an entry and deletes it; Draft updates it.
+  EntryDraft? openDraft;
+
+  /// The Drafts tab is showing instead of a form.
+  bool showDrafts = false;
   List<Record>? _suggestFor;
   final _suggest = <String, List<String>>{};
 
@@ -274,18 +294,58 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   String _draftKey(RozTab t) =>
       '${widget.dialog ? 'dialog' : 'page'}:${t.name}';
 
+  /// Where the values of an open saved draft are kept while it is being
+  /// finished, with its id, so they outlive moving between pages like the
+  /// tabs' own unsaved values.
+  String get _openKey => '${widget.dialog ? 'dialog' : 'page'}:open';
+
+  /// The Drafts tab is offered on the Roznamcha page and the New entry
+  /// dialog, not in a party's khata, while correcting or with a draft open.
+  bool get _draftsTab =>
+      editing == null && openDraft == null && widget.initialParty == null;
+
   @override
   void initState() {
     super.initState();
     tab = widget.initialTab;
-    if (widget.replace != null && rozEditable(widget.replace!)) {
+    final draft = widget.initialDraft;
+    if (draft != null) {
+      tab = RozTab.values.byName(draft.tab);
+      _restore(draft.data);
+      openDraft = draft;
+      pickedDate = draft.date;
+    } else if (widget.replace != null && rozEditable(widget.replace!)) {
       edit(widget.replace!, notify: false);
+    } else if (widget.initialParty == null) {
+      _restoreIdle();
+      showDrafts = widget.initialDrafts && openDraft == null;
     } else {
       _restore(app.rozDrafts[_draftKey(tab)]);
-      if (widget.initialParty != null) {
-        c['party']!.text = app.name(widget.initialParty!);
-        _kindForKhata();
+      c['party']!.text = app.name(widget.initialParty!);
+      _kindForKhata();
+    }
+    if (c['rate']!.text.isEmpty) c['rate']!.text = _lastRate();
+  }
+
+  /// What the form shows when no entry is being corrected: the saved draft
+  /// that was open (if it still exists), else this tab's unsaved values.
+  void _restoreIdle() {
+    final open = app.rozDrafts[_openKey];
+    final draft = open == null ? null : app.entryDraft('${open['draftId']}');
+    final openTab = RozTab.values
+        .where((v) => v.name == open?['draftTab'])
+        .firstOrNull;
+    if (draft != null && openTab != null) {
+      tab = openTab;
+      _restore(open);
+      openDraft = draft;
+      if (widget.dialog && open?['pickedDate'] is String) {
+        pickedDate = open!['pickedDate'] as String;
       }
+    } else {
+      app.rozDrafts.remove(_openKey);
+      openDraft = null;
+      _restore(app.rozDrafts[_draftKey(tab)]);
     }
     if (c['rate']!.text.isEmpty) c['rate']!.text = _lastRate();
   }
@@ -389,7 +449,18 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   }
 
   void _remember() {
-    if (editing == null) app.rozDrafts[_draftKey(tab)] = _snapshot();
+    if (editing != null) return;
+    final draft = openDraft;
+    if (draft != null) {
+      app.rozDrafts[_openKey] = {
+        ..._snapshot(),
+        'draftId': draft.id,
+        'draftTab': tab.name,
+        if (pickedDate != null) 'pickedDate': pickedDate,
+      };
+    } else {
+      app.rozDrafts[_draftKey(tab)] = _snapshot();
+    }
   }
 
   void _changed() {
@@ -401,11 +472,138 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     setState(() {});
   }
 
-  void selectTab(RozTab t) {
-    if (editing != null || t == tab) return;
+  /// Shows the Drafts tab: every saved draft, to open or delete.
+  void showDraftList() {
+    if (!_draftsTab || showDrafts) return;
+    _remember();
+    setState(() {
+      showDrafts = true;
+      error = null;
+      success = null;
+    });
+  }
+
+  /// Opens a saved draft: a Roznamcha one in this form, on its own tab and
+  /// day (the top bar's day moves to it), a composer one in the composer.
+  Future<void> openSavedDraft(EntryDraft d) async {
+    if (d.source == EntryDraft.composer) {
+      final type = EntryType.values.where((v) => v.name == d.tab).firstOrNull;
+      if (type != null) await composeEntry(context, app, type: type, draft: d);
+      return;
+    }
+    final t = RozTab.values.where((v) => v.name == d.tab).firstOrNull;
+    if (t == null || !_draftsTab) return;
     _remember();
     setState(() {
       tab = t;
+      showDrafts = false;
+      error = null;
+      success = null;
+      _restore(d.data);
+      openDraft = d;
+      if (c['rate']!.text.isEmpty) c['rate']!.text = _lastRate();
+      if (widget.dialog) pickedDate = d.date;
+    });
+    if (!widget.dialog) app.setDate(d.date);
+    _remember();
+  }
+
+  /// Puts the open draft back unchanged and returns to this tab's values.
+  void cancelDraft() {
+    if (openDraft == null) return;
+    setState(() {
+      app.rozDrafts.remove(_openKey);
+      openDraft = null;
+      pickedDate = null;
+      error = null;
+      success = null;
+      _restoreIdle();
+    });
+  }
+
+  /// Nothing typed yet (the rate is filled in by itself, and inside a khata
+  /// so is the party).
+  bool _blank() =>
+      _keys.every(
+        (k) =>
+            k == 'rate' ||
+            (k == 'party' && widget.initialParty != null) ||
+            c[k]!.text.trim().isEmpty,
+      ) &&
+      _extraBanks.every(
+        (l) =>
+            l.amount.text.trim().isEmpty &&
+            l.company.text.trim().isEmpty &&
+            l.bankName.text.trim().isEmpty,
+      ) &&
+      dueDate.isEmpty;
+
+  /// The Draft button: keeps what is typed as a saved draft, complete or not,
+  /// and clears the form for the next entry. An open draft is updated.
+  Future<void> saveDraft() async {
+    if (saving || editing != null) return;
+    setState(() {
+      error = null;
+      success = null;
+    });
+    if (_blank()) {
+      setState(() => error = context.t('Draft ke liye kuch likhein'));
+      return;
+    }
+    var missing = '';
+    try {
+      _build();
+    } catch (e) {
+      missing = '$e'.replaceFirst(
+        RegExp(r'^(FormatException: |Bad state: |Exception: )'),
+        '',
+      );
+    }
+    final party = c['party']!.text.trim();
+    final name = party.isNotEmpty && _usesParty
+        ? party
+        : context.t(tab == RozTab.kharcha ? kind.label : tab.label);
+    final open = openDraft;
+    setState(() => saving = true);
+    try {
+      await app.saveEntryDraft(
+        id: open?.id,
+        source: EntryDraft.roznamcha,
+        tab: tab.name,
+        date: date,
+        data: _snapshot(),
+        missing: missing,
+      );
+      if (!mounted) return;
+      if (open == null) app.rozDrafts.remove(_draftKey(tab));
+      setState(() {
+        if (open == null) {
+          _clearAfterSave();
+        } else {
+          app.rozDrafts.remove(_openKey);
+          openDraft = null;
+          pickedDate = null;
+          _restoreIdle();
+        }
+        success = '${context.t('Draft mein save ho gaya')}: $name';
+      });
+    } catch (e) {
+      if (mounted) setState(() => error = errorText(context, e));
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  void selectTab(RozTab t) {
+    if (editing != null || openDraft != null) return;
+    if (t == tab) {
+      if (showDrafts) setState(() => showDrafts = false);
+      return;
+    }
+    _remember();
+    setState(() {
+      tab = t;
+      showDrafts = false;
       error = null;
       success = null;
       final keepAccount = account, keepParty = c['party']!.text;
@@ -429,6 +627,10 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       final (t, k) = target;
       final data = d.data;
       editing = d;
+      // An open saved draft waits (its values are kept under [_openKey])
+      // and comes back when the correction is done or cancelled.
+      openDraft = null;
+      showDrafts = false;
       tab = t;
       kind = k;
       error = null;
@@ -542,7 +744,11 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       editing = null;
       error = null;
       success = null;
-      _restore(app.rozDrafts[_draftKey(tab)]);
+      if (widget.initialParty == null) {
+        _restoreIdle();
+      } else {
+        _restore(app.rozDrafts[_draftKey(tab)]);
+      }
       if (c['rate']!.text.isEmpty) c['rate']!.text = _lastRate();
     });
   }
@@ -960,10 +1166,20 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     }
     setState(() => saving = true);
     try {
-      await app.post(data, replace: replace, reason: reason, before: before);
+      final draft = replace == null ? openDraft : null;
+      await app.post(
+        data,
+        replace: replace,
+        reason: reason,
+        before: before,
+        draftId: draft?.id,
+      );
       if (!mounted) return;
       final summary = _summary(data);
-      app.rozDrafts.remove(_draftKey(tab));
+      // A finished saved draft is now an entry: the draft goes.
+      if (draft == null) {
+        app.rozDrafts.remove(_draftKey(tab));
+      }
       if (replace != null && widget.dialog) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${context.t('Update ho gaya')}: $summary')),
@@ -974,7 +1190,20 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       setState(() {
         final wasEditing = replace != null;
         editing = null;
-        _clearAfterSave();
+        if (draft != null) {
+          // Back to what this tab held before the draft was opened.
+          app.rozDrafts.remove(_openKey);
+          openDraft = null;
+          pickedDate = null;
+          _restoreIdle();
+        } else if (wasEditing &&
+            widget.initialParty == null &&
+            app.rozDrafts[_openKey] != null) {
+          // A draft was open when the correction began: it comes back.
+          _restoreIdle();
+        } else {
+          _clearAfterSave();
+        }
         success =
             '${context.t(wasEditing ? 'Update ho gaya' : 'Save ho gaya')}: $summary';
       });
@@ -995,6 +1224,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       date,
       replace: editing,
       selected: sharePurchase,
+      draftId: openDraft?.id,
     );
     final known = options.any((o) => o.$1.data['reference'] == sharePurchase);
     return KeyedSubtree(
@@ -1094,33 +1324,49 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   int _partyEffect(Document d, String party) =>
       _postingEffect(d, 'ar:$party') + _postingEffect(d, 'ap:$party');
 
+  Document? get _previewOriginal =>
+      editing ??
+      (openDraft == null || app.record(openDraft!.id) == null
+          ? null
+          : Document(app.record(openDraft!.id)!));
+
+  Record? _previewParty(String name) => app
+      .ofKind('party', archived: true)
+      .where(
+        (p) => AppController.nameKey(p.name) == AppController.nameKey(name),
+      )
+      .firstOrNull;
+
   /// Customer / company balance before → after this entry. It is the whole
   /// khata balance, both sides, as on the Parties page: a customer you owe
   /// (an opening payable or an advance) reads "Dena", not Rs 0.
   String? _balancePreview(int newEffect) {
-    final party = app.partyByName(c['party']!.text);
+    final party = _previewParty(c['party']!.text);
     if (party == null) return null;
     final role = _role;
     final sign = role.payable ? -1 : 1;
     final now = sign * app.book.partyBalance(party.id);
-    final old = editing == null ? 0 : sign * _partyEffect(editing!, party.id);
+    final original = _previewOriginal;
+    final old = original == null ? 0 : sign * _partyEffect(original, party.id);
     final after = now - old + newEffect;
     return '${context.t('Baqaya')}: ${_partyBalance(now, role)}  →  ${_partyBalance(after, role)}';
   }
 
   /// What we owe the company a customer paid directly, before → after.
   String _directPreview(String name, int direct) {
-    final party = app.partyByName(name);
+    final party = _previewParty(name);
     final id = party?.id ?? '';
     final now = -app.book.partyBalance(id);
-    final old = editing == null ? 0 : -_partyEffect(editing!, id);
+    final original = _previewOriginal;
+    final old = original == null ? 0 : -_partyEffect(original, id);
     return '${party?.name ?? name.trim()}: ${_partyBalance(now, PartyRole.company)}  →  ${_partyBalance(now - old - direct, PartyRole.company)}';
   }
 
   String? _accountPreview(String id, int change) {
     if (id.isEmpty || app.record(id) == null) return null;
     final now = app.book.money(id);
-    final old = editing == null ? 0 : _postingEffect(editing!, 'money:$id');
+    final original = _previewOriginal;
+    final old = original == null ? 0 : _postingEffect(original, 'money:$id');
     return '${accountLabel(app.record(id)!)}: ${rs(now)}  →  ${rs(now - old + change)}';
   }
 
@@ -1153,15 +1399,19 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         String? costError;
         if (bulk > 0 && bulkAtCost) {
           try {
-            shareCost = app.quoteBulkCost({
-              'date': date,
-              if (editing != null) 'occurredAt': editing!.value('occurredAt'),
-              'quantities': {
-                for (final s in sizes) '$s': _try(() => _count('q$s')),
+            shareCost = app.quoteBulkCost(
+              {
+                'date': date,
+                if (editing != null) 'occurredAt': editing!.value('occurredAt'),
+                'quantities': {
+                  for (final s in sizes) '$s': _try(() => _count('q$s')),
+                },
+                'extraGrams': bulk,
+                if (sharePurchase.isNotEmpty) 'sharePurchase': sharePurchase,
               },
-              'extraGrams': bulk,
-              if (sharePurchase.isNotEmpty) 'sharePurchase': sharePurchase,
-            }, replace: editing);
+              replace: editing,
+              draftId: openDraft?.id,
+            );
           } catch (e) {
             costError = errorText(context, e);
           }
@@ -1278,8 +1528,8 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   // ---------- suggestions (HTML datalists) ----------
 
   List<String> _suggestions(String kind) {
-    if (!identical(_suggestFor, app.records)) {
-      _suggestFor = app.records;
+    if (!identical(_suggestFor, app.accountingRecords)) {
+      _suggestFor = app.accountingRecords;
       _suggest.clear();
       final notes = <String>{},
           office = <String>{},
@@ -1839,54 +2089,106 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     );
   }
 
+  Widget _chip({
+    required String key,
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required Color color,
+    required VoidCallback onTap,
+  }) => Material(
+    color: selected ? color : Colors.white,
+    shape: StadiumBorder(side: BorderSide(color: selected ? color : rozBorder)),
+    child: InkWell(
+      key: ValueKey(key),
+      customBorder: const StadiumBorder(),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: selected ? Colors.white : teal),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : ink,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
   Widget _tabs() => Wrap(
     spacing: 8,
     runSpacing: 8,
     children: [
       for (final t in RozTab.values)
-        if (editing == null || t == tab)
-          Material(
-            color: t == tab ? (t.spending ? amber : teal) : Colors.white,
-            shape: StadiumBorder(
-              side: BorderSide(
-                color: t == tab ? (t.spending ? amber : teal) : rozBorder,
-              ),
-            ),
-            child: InkWell(
-              key: ValueKey('roz-tab-${t.name}'),
-              customBorder: const StadiumBorder(),
-              onTap: () => selectTab(t),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      t.icon,
-                      size: 16,
-                      color: t == tab ? Colors.white : teal,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      context.t(t.label),
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: t == tab ? Colors.white : ink,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+        if ((editing == null && openDraft == null) || t == tab)
+          _chip(
+            key: 'roz-tab-${t.name}',
+            icon: t.icon,
+            label: context.t(t.label),
+            selected: t == tab && !showDrafts,
+            color: t.spending ? amber : teal,
+            onTap: () => selectTab(t),
           ),
+      if (_draftsTab)
+        _chip(
+          key: 'roz-tab-drafts',
+          icon: Icons.drafts_outlined,
+          label: app.entryDrafts.isEmpty
+              ? context.t('Drafts')
+              : '${context.t('Drafts')} (${app.entryDrafts.length})',
+          selected: showDrafts,
+          color: ink,
+          onTap: showDraftList,
+        ),
     ],
   );
 
+  /// The Drafts tab's content: every saved draft, to open or delete. It
+  /// follows the controller itself, since the dialog form has nothing else
+  /// that redraws it when a draft is deleted or finished.
+  Widget _draftsBody() => ListenableBuilder(
+    listenable: app,
+    builder: (context, _) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+          child: _tabs(),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+          decoration: const BoxDecoration(
+            color: rozSoft,
+            border: Border.symmetric(horizontal: BorderSide(color: rozBorder)),
+          ),
+          child: Text(
+            context.t(
+              'Adhoori entries jo Draft mein rakhi hain. Kholein, poori karein aur Add karein.',
+            ),
+            style: const TextStyle(fontSize: 12.5, color: muted),
+          ),
+        ),
+        Container(
+          color: rozSoft,
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: DraftList(app: app, onOpen: openSavedDraft),
+        ),
+      ],
+    ),
+  );
+
   Widget _body() {
+    if (showDrafts) return _draftsBody();
     final preview = _preview();
     final notInKhata = _notInKhata();
     final closed = app.isClosed(date);
@@ -1914,6 +2216,29 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                   Expanded(
                     child: Text(
                       '${context.t('Entry theek ho rahi hai')}: ${editing!.reference} · ${dmy(editing!.date)}',
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xff855b20),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (openDraft != null)
+            Container(
+              key: const ValueKey('roz-draft-open'),
+              color: rozAccentSoft,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.drafts_outlined, color: amber, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${context.t('Draft khula hai')}: ${dmy(openDraft!.date)} · '
+                      '${context.t('Saved at')}: ${draftSavedAt(openDraft!)}',
                       style: const TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w600,
@@ -2041,6 +2366,27 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                             icon: const Icon(Icons.close, size: 17),
                             label: Text(context.t('Cancel')),
                           ),
+                        // Closes the open draft and leaves it as it was.
+                        if (openDraft != null)
+                          OutlinedButton.icon(
+                            key: const ValueKey('roz-draft-cancel'),
+                            onPressed: saving ? null : cancelDraft,
+                            icon: const Icon(Icons.close, size: 17),
+                            label: Text(context.t('Cancel')),
+                          ),
+                        if (editing == null)
+                          OutlinedButton.icon(
+                            key: const ValueKey('roz-draft'),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 14,
+                              ),
+                            ),
+                            onPressed: saving ? null : saveDraft,
+                            icon: const Icon(Icons.drafts_outlined, size: 18),
+                            label: Text(context.t('Draft')),
+                          ),
                         FilledButton.icon(
                           key: const ValueKey('roz-save'),
                           style: FilledButton.styleFrom(
@@ -2128,7 +2474,11 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                 ),
                 onPressed: () async {
                   final v = await pickDate(context, date);
-                  if (v != null) setState(() => pickedDate = v);
+                  if (v != null) {
+                    setState(() => pickedDate = v);
+                    // An open draft keeps its new day while being finished.
+                    if (openDraft != null) _remember();
+                  }
                 },
                 icon: const Icon(Icons.calendar_today_outlined, size: 15),
                 label: Text(

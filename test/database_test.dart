@@ -159,6 +159,14 @@ void main() {
     await db.customStatement('CREATE TABLE future_data (x TEXT)');
     await db.customStatement("INSERT INTO future_data VALUES ('kept?')");
     app.rozDrafts['sale'] = {'amount': '9'};
+    // A saved draft (the Draft button), kept in metadata `entry_drafts`.
+    await app.saveEntryDraft(
+      source: EntryDraft.roznamcha,
+      tab: 'aamad',
+      date: '2026-01-02',
+      data: {'party': 'Ali', 'q11800': '2'},
+    );
+    expect(await db.meta('entry_drafts'), isNotNull);
     app.setDate('2026-01-02');
     expect(app.pendingCount, greaterThan(0));
     expect(app.batchStarts, isNotEmpty);
@@ -175,6 +183,7 @@ void main() {
     expect(app.rozDrafts, isEmpty);
     expect(app.selectedDate, businessDate());
     expect(app.composerDrafts, isEmpty);
+    expect(app.entryDrafts, isEmpty);
     expect(app.preRestoreSaved, isFalse);
     final oldDrafts = await db
         .customSelect('SELECT COUNT(*) AS n FROM drafts')

@@ -109,12 +109,16 @@ class Record {
   final Json data;
   final int version;
   final bool pending;
+
+  /// Local projection of a saved draft, never part of a synced record.
+  final String? draftId;
   const Record(
     this.id,
     this.kind,
     this.data, {
     this.version = 0,
     this.pending = false,
+    this.draftId,
   });
   String get name => '${data['name'] ?? ''}';
   bool get archived => data['archived'] == true;
@@ -158,6 +162,7 @@ class Document {
   const Document(this.record);
   Json get data => record.data;
   String get id => record.id;
+  bool get isDraft => record.draftId != null;
   EntryType get type => EntryType.values.byName('${data['type']}');
   String get date => '${data['date']}';
   String get party => '${data['party'] ?? ''}';
@@ -219,10 +224,9 @@ class Document {
 
   /// The reference of the purchase a share's bulk comes from, or '' for
   /// oldest stock first (FIFO). A reference survives corrections.
-  String get sharePurchase =>
-      bulkAtCost && data['sharePurchase'] is String
-          ? data['sharePurchase'] as String
-          : '';
+  String get sharePurchase => bulkAtCost && data['sharePurchase'] is String
+      ? data['sharePurchase'] as String
+      : '';
 
   /// Cylinders per size (sizes with none are left out), each billed at the
   /// rate. Lines are rounded to whole rupees on their own, so they can differ
@@ -342,6 +346,70 @@ class Command {
     error: j['error'] as String?,
     created: integer(j['created']),
   );
+}
+
+/// An entry put aside with the **Draft** button, complete or not. Its known
+/// values contribute to the local ledger without entering the sync queue.
+/// Drafts are
+/// kept on this device in the organization's metadata (`entry_drafts`), so
+/// they survive a restart, go into backups and are erased by Reset all data.
+class EntryDraft {
+  /// Which form wrote it: `roznamcha` (the Naya Entry tabs) or `composer`.
+  static const roznamcha = 'roznamcha', composer = 'composer';
+  final String id, source;
+
+  /// The `RozTab` name (Roznamcha form) or `EntryType` name (composer).
+  final String tab;
+
+  /// The business date the entry is for; a finished draft keeps it.
+  final String date;
+
+  /// The Roznamcha form's snapshot (what was typed) or the composer payload.
+  final Json data;
+
+  /// Why it could not be added yet (an English error message, translated
+  /// when shown), or '' when it was complete.
+  final String missing;
+  final int savedAt;
+  const EntryDraft({
+    required this.id,
+    required this.source,
+    required this.tab,
+    required this.date,
+    required this.data,
+    this.missing = '',
+    required this.savedAt,
+  });
+
+  Json toJson() => {
+    'id': id,
+    'source': source,
+    'tab': tab,
+    'date': date,
+    'data': data,
+    'missing': missing,
+    'savedAt': savedAt,
+  };
+
+  /// Null for anything that is not a usable draft, so one damaged item only
+  /// loses itself.
+  static EntryDraft? fromJson(dynamic j) {
+    if (j is! Map || j['data'] is! Map) return null;
+    final id = '${j['id'] ?? ''}', tab = '${j['tab'] ?? ''}';
+    final source = '${j['source'] ?? ''}';
+    if (id.isEmpty || tab.isEmpty || ![roznamcha, composer].contains(source)) {
+      return null;
+    }
+    return EntryDraft(
+      id: id,
+      source: source,
+      tab: tab,
+      date: '${j['date'] ?? ''}',
+      data: Map<String, dynamic>.from(j['data'] as Map),
+      missing: '${j['missing'] ?? ''}',
+      savedAt: integer(j['savedAt']),
+    );
+  }
 }
 
 Json decodeObject(String text) =>

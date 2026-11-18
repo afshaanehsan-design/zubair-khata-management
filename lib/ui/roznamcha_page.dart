@@ -126,6 +126,10 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       children: [
         _heading(day, dayDocs),
         ..._notices(book.warnings, batch, batched, day, closing),
+        if (book.documents.any((d) => d.isDraft))
+          const Notice(
+            'Totals include saved drafts. Missing values are not counted.',
+          ),
         if (app.book.documents.isEmpty) _onboarding(),
         _strip(day, hasGas, gasOpen, full, book.gasGrams),
         const SizedBox(height: 14),
@@ -900,6 +904,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(app.name(d.party), style: _boldStyle),
+            if (d.isDraft) const RozBadge('Draft', accent: true),
             if (company) const RozBadge('Company wasooli', outlined: true),
             if (d.type == EntryType.deposit)
               const RozBadge('Deposit', outlined: true),
@@ -1112,6 +1117,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(title, style: _boldStyle),
+        if (d.isDraft) const RozBadge('Draft', accent: true),
         if (bankAccount != null) RozBadge(_accountName(bankAccount)),
         if (detail.isNotEmpty) Text('· $detail', style: _cellStyle),
         if (rozNote(d).isNotEmpty) Text('· ${rozNote(d)}', style: _mutedStyle),
@@ -1760,6 +1766,10 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
   // ---------- actions ----------
 
   void _edit(Document d) {
+    if (d.isDraft) {
+      composeEntry(context, app, replace: d);
+      return;
+    }
     if (d.type == EntryType.adjustment) {
       editOpeningBalance(context, app, existing: d);
       return;

@@ -457,7 +457,12 @@ Future<void> showTransaction(
                           ? 'What was sold'
                           : 'Items credited',
                       [
-                        for (final r in billRows(d, t, shareFrom: app.shareSource(d))) _billRow(ctx, r),
+                        for (final r in billRows(
+                          d,
+                          t,
+                          shareFrom: app.shareSource(d),
+                        ))
+                          _billRow(ctx, r),
                         const Divider(height: 18),
                         _factRow(
                           ctx,
@@ -525,7 +530,9 @@ Future<void> showTransaction(
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          postingLabel(app, p.account, t),
+                                          p.setOff
+                                              ? '${postingLabel(app, p.account, t)} · ${t('Set off')}'
+                                              : postingLabel(app, p.account, t),
                                           style: const TextStyle(
                                             fontSize: 12.5,
                                           ),
@@ -629,7 +636,7 @@ Future<void> showTransaction(
                 onPressed: () async {
                   await composeEntry(ctx, app, replace: d);
                 },
-                child: Text(ctx.t('Correct entry')),
+                child: Text(ctx.t(d.isDraft ? 'Kholein' : 'Correct entry')),
               ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),

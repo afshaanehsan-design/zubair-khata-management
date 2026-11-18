@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/controller.dart';
 import '../core/l10n.dart';
 import '../core/models.dart';
+import '../features/ledger/book.dart' show validateDocument;
 import '../features/reports/reports.dart';
 import 'components.dart';
 import 'roznamcha_widgets.dart' show dmy, errorText;
@@ -15,7 +16,8 @@ import 'roznamcha_form.dart';
 /// Opens the right form: daily cash-book entries use the Roznamcha form
 /// (same tabs and fields as the original page); opening balances use their
 /// own dialog; purchases, stock, cylinders, credit notes and conflict reviews
-/// use the general composer below.
+/// use the general composer below. A saved composer [draft] always opens in
+/// the composer, on the draft's own date.
 Future<void> composeEntry(
   BuildContext context,
   AppController app, {
@@ -24,16 +26,28 @@ Future<void> composeEntry(
   String? party,
   Json? prefill,
   Future<void> Function()? onSaved,
+  EntryDraft? draft,
 }) async {
+  if (replace?.isDraft == true) {
+    final saved = app.entryDraft(replace!.record.draftId!);
+    if (saved != null) await composeEntry(context, app, draft: saved);
+    return;
+  }
+  if (draft?.source == EntryDraft.roznamcha) {
+    await openRoznamchaForm(context, app, draft: draft);
+    return;
+  }
   // Opening balances and other adjustments are corrected in their own small
   // dialog, which shows payables the way they are read.
-  if (prefill == null &&
+  if (draft == null &&
+      prefill == null &&
       onSaved == null &&
       replace?.type == EntryType.adjustment) {
     await editOpeningBalance(context, app, existing: replace);
     return;
   }
-  if (prefill == null &&
+  if (draft == null &&
+      prefill == null &&
       onSaved == null &&
       (replace != null
           ? rozEditable(replace)
@@ -48,6 +62,7 @@ Future<void> composeEntry(
     initialParty: party,
     prefill: prefill,
     onSaved: onSaved,
+    draft: draft,
   );
   if (MediaQuery.sizeOf(context).width < 700) {
     await showModalBottomSheet<void>(
@@ -85,6 +100,10 @@ class EntryComposer extends StatefulWidget {
   final String? initialParty;
   final Json? prefill;
   final Future<void> Function()? onSaved;
+
+  /// A saved draft ([AppController.entryDrafts]) being finished: Save turns
+  /// it into an entry and deletes it, Draft updates it.
+  final EntryDraft? draft;
   const EntryComposer({
     required this.app,
     this.initial,
@@ -92,6 +111,7 @@ class EntryComposer extends StatefulWidget {
     this.initialParty,
     this.prefill,
     this.onSaved,
+    this.draft,
     super.key,
   });
   @override
@@ -138,19 +158,21 @@ class _EntryComposerState extends State<EntryComposer> {
   final returnedEdited = <int, bool>{};
 
   /// Only a new entry keeps a draft ([AppController.composerDrafts]); a
-  /// correction or a reviewed change always starts from its own data.
+  /// correction or a reviewed change always starts from its own data. A
+  /// saved draft being finished keeps its unsaved values under its own id.
   bool get keepsDraft => widget.replace == null && widget.prefill == null;
-  String get draftKey =>
-      widget.initial != null &&
-          ![
-            EntryType.sale,
-            EntryType.receipt,
-            EntryType.payment,
-            EntryType.expense,
-            EntryType.transfer,
-            EntryType.discount,
-            EntryType.adjustment,
-          ].contains(widget.initial)
+  String get draftKey => widget.draft != null
+      ? 'saved:${widget.draft!.id}'
+      : widget.initial != null &&
+            ![
+              EntryType.sale,
+              EntryType.receipt,
+              EntryType.payment,
+              EntryType.expense,
+              EntryType.transfer,
+              EntryType.discount,
+              EntryType.adjustment,
+            ].contains(widget.initial)
       ? 'context:${widget.initial!.name}'
       : 'new-entry';
   @override
@@ -191,6 +213,8 @@ class _EntryComposerState extends State<EntryComposer> {
     if (widget.initialParty != null && draft?['party'] != widget.initialParty) {
       draft = null;
     }
+    final savedDraft = widget.draft;
+    if (savedDraft != null) draft ??= savedDraft.data;
     final saved = widget.prefill ?? widget.replace?.data ?? draft;
     if (saved != null &&
         (widget.initial == null ||
@@ -198,9 +222,14 @@ class _EntryComposerState extends State<EntryComposer> {
             widget.replace != null)) {
       _hydrate(saved);
       if (identical(saved, draft)) {
-        // A draft keeps what was typed, not when: the entry goes on the
-        // page's date at the current time, never on the day it was begun.
-        date = widget.app.selectedDate;
+        if (savedDraft == null) {
+          // A draft keeps what was typed, not when: the entry goes on the
+          // page's date at the current time, never on the day it was begun.
+          date = widget.app.selectedDate;
+        } else if (date.isEmpty || date == 'null') {
+          // A saved draft keeps its own day (the user can change it).
+          date = savedDraft.date;
+        }
         occurredAt = DateTime.now().millisecondsSinceEpoch;
       }
     }
@@ -404,8 +433,9 @@ class _EntryComposerState extends State<EntryComposer> {
           'bulkAtCost': true,
           'bulkCost': widget.app.record(sourceInvoice)?.data['bulkCost'] ?? 0,
           if (widget.app.record(sourceInvoice)?.data['sharePurchase'] != null)
-            'sharePurchase':
-                widget.app.record(sourceInvoice)?.data['sharePurchase'],
+            'sharePurchase': widget.app
+                .record(sourceInvoice)
+                ?.data['sharePurchase'],
         },
         'cash': 0,
         'bank': 0,
@@ -422,6 +452,7 @@ class _EntryComposerState extends State<EntryComposer> {
         payload['bulkCost'] = widget.app.quoteBulkCost(
           payload,
           replace: widget.replace,
+          draftId: widget.draft?.id,
         );
       } catch (e) {
         if (strict) rethrow;
@@ -717,21 +748,11 @@ class _EntryComposerState extends State<EntryComposer> {
     var posted = false;
     await perform(context, () async {
       final payload = _payload(strict: true);
-      if (type == EntryType.stockAdjustment &&
-          costKnown &&
-          _number('grams', 3) > 0 &&
-          fields['cost']!.text.trim().isEmpty) {
-        throw const FormatException('Enter stock cost');
-      }
+      _check();
       String reason = '';
       if (widget.replace != null) {
         reason = await askText(context, 'Reason for correction') ?? '';
         if (reason.isEmpty) throw const FormatException('A reason is required');
-      }
-      if (type == EntryType.cylinder &&
-          cylinderMode != 'Loss / correction' &&
-          _number('count', 0) <= 0) {
-        throw const FormatException('Enter cylinder count changes');
       }
       // Gas is bought from a company: a purchase from a party not yet marked
       // as one marks it, in the same change, as the Roznamcha form does.
@@ -741,6 +762,7 @@ class _EntryComposerState extends State<EntryComposer> {
       await widget.app.post(
         payload,
         replace: widget.replace,
+        draftId: widget.draft?.id,
         reason: reason,
         before: [
           if (seller != null &&
@@ -768,6 +790,83 @@ class _EntryComposerState extends State<EntryComposer> {
       allocations = null;
       returnedEdited.clear();
       occurredAt = DateTime.now().millisecondsSinceEpoch;
+    }
+    setState(() => saving = false);
+  }
+
+  /// What Save checks itself before posting (the rest is [validateDocument]
+  /// inside `post`).
+  void _check() {
+    if (type == EntryType.stockAdjustment &&
+        costKnown &&
+        _number('grams', 3) > 0 &&
+        fields['cost']!.text.trim().isEmpty) {
+      throw const FormatException('Enter stock cost');
+    }
+    if (type == EntryType.cylinder &&
+        cylinderMode != 'Loss / correction' &&
+        _number('count', 0) <= 0) {
+      throw const FormatException('Enter cylinder count changes');
+    }
+  }
+
+  /// Nothing entered yet: no party or invoice chosen and every field empty
+  /// (the rate the form fills in by itself does not count).
+  bool _blank() {
+    final rate = integer(widget.app.settings['defaultRate']);
+    final defaultRate = rate > 0 ? decimalText(rate, 2) : '';
+    return (party.isEmpty || party == widget.initialParty) &&
+        sourceInvoice.isEmpty &&
+        fields.entries.every(
+          (e) =>
+              e.value.text.trim().isEmpty ||
+              (e.key == 'rate' && e.value.text.trim() == defaultRate),
+        );
+  }
+
+  /// The Draft button: keeps the entry as a saved draft, complete or not,
+  /// and closes the composer. A saved draft being finished is updated.
+  Future<void> saveDraft() async {
+    if (saving) return;
+    if (_blank()) {
+      showMessage(
+        context,
+        context.t('Draft ke liye kuch likhein'),
+        error: true,
+      );
+      return;
+    }
+    final payload = _payload();
+    var missing = '';
+    try {
+      final strict = _payload(strict: true);
+      _check();
+      validateDocument(
+        Document(Record('draft', 'document', cleanDocumentData(strict))),
+        widget.app.records,
+      );
+    } catch (e) {
+      missing = '$e'.replaceFirst(
+        RegExp(r'^(FormatException: |Bad state: |Exception: )'),
+        '',
+      );
+    }
+    setState(() => saving = true);
+    final done = await perform(context, () async {
+      await widget.app.saveEntryDraft(
+        id: widget.draft?.id,
+        source: EntryDraft.composer,
+        tab: type.name,
+        date: date,
+        data: payload,
+        missing: missing,
+      );
+      widget.app.composerDrafts.remove(draftKey);
+    }, success: 'Saved to drafts');
+    if (!mounted) return;
+    if (done) {
+      Navigator.pop(context);
+      return;
     }
     setState(() => saving = false);
   }
@@ -833,6 +932,12 @@ class _EntryComposerState extends State<EntryComposer> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Tag(entryLabel(type.name)),
+                    if (widget.draft != null)
+                      Tag(
+                        'Draft khula hai',
+                        warning: true,
+                        key: const ValueKey('composer-draft-open'),
+                      ),
                     OutlinedButton.icon(
                       onPressed: () async {
                         final result = await pickDate(context, date);
@@ -958,6 +1063,7 @@ class _EntryComposerState extends State<EntryComposer> {
                           date,
                           replace: widget.replace,
                           selected: sharePurchase,
+                          draftId: widget.draft?.id,
                         ))
                           (
                             '${p.data['reference']}',
@@ -1309,6 +1415,16 @@ class _EntryComposerState extends State<EntryComposer> {
                         Expanded(child: Text(context.t('Remaining balance'))),
                         Amount(
                           widget.app.book.partyBalance(party) -
+                              (widget.draft == null
+                                  ? 0
+                                  : widget.app.book.postings
+                                        .where(
+                                          (p) =>
+                                              p.document == widget.draft!.id &&
+                                              (p.account == 'ar:$party' ||
+                                                  p.account == 'ap:$party'),
+                                        )
+                                        .fold<int>(0, (v, p) => v + p.debit)) -
                               (widget.replace?.total ?? 0) +
                               (widget.replace?.collected ?? 0) +
                               document.total -
@@ -1341,12 +1457,20 @@ class _EntryComposerState extends State<EntryComposer> {
                 onPressed: saving ? null : () => Navigator.pop(context),
                 child: Text(context.t('Cancel')),
               ),
-              if (widget.replace == null && widget.prefill == null)
+              if (keepsDraft)
+                OutlinedButton.icon(
+                  key: const ValueKey('composer-draft'),
+                  onPressed: saving ? null : saveDraft,
+                  icon: const Icon(Icons.drafts_outlined, size: 18),
+                  label: Text(context.t('Draft')),
+                ),
+              if (keepsDraft && widget.draft == null)
                 OutlinedButton(
                   onPressed: saving ? null : () => save(true),
                   child: Text(context.t('Save & next')),
                 ),
               FilledButton.icon(
+                key: const ValueKey('composer-save'),
                 onPressed: saving ? null : () => save(false),
                 icon: saving
                     ? const SizedBox(

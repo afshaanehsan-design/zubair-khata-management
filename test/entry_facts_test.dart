@@ -101,7 +101,8 @@ void main() {
         partyOwed(app.book, app.partyByName(name)!.id);
     expect(owed('Owes'), (receive: 100000, pay: 0));
     expect(owed('Company'), (receive: 0, pay: 30000));
-    expect(owed('Both'), (receive: 100000, pay: 30000));
+    // Owes Rs 1,000 and is owed Rs 300: set off, Rs 700 to receive.
+    expect(owed('Both'), (receive: 70000, pay: 0));
     expect(owed('Clear'), (receive: 0, pay: 0));
     // Paid before buying anything: you owe the customer the advance.
     expect(owed('Advance'), (receive: 0, pay: 50000));
@@ -140,9 +141,11 @@ void main() {
 
       // Each row says what is owed either way, on the far side.
       expect(inList('Settled'), findsOneWidget);
-      expect(inList('Rs 1,000'), findsNWidgets(2)); // Owes and Both
-      expect(inList('Rs 300'), findsNWidgets(2)); // Company and Both
-      expect(inList('You will pay'), findsNWidgets(2));
+      // Both's two sides are set off: Rs 1,000 less Rs 300.
+      expect(inList('Rs 1,000'), findsOneWidget); // Owes
+      expect(inList('Rs 300'), findsOneWidget); // Company
+      expect(inList('Rs 700'), findsOneWidget); // Both
+      expect(inList('You will pay'), findsOneWidget);
       expect(
         tester.getTopRight(inList('Rs 300').first).dx,
         closeTo(tester.getTopRight(find.byKey(PartiesPage.listKey)).dx - 12, 2),
@@ -153,10 +156,9 @@ void main() {
       expect(find.byType(Dialog), findsNothing, reason: 'shown beside');
       expect(inDetails(find.text('Both')), findsOneWidget);
       expect(inDetails(find.text('Clear')), findsNothing);
-      expect(
-        inDetails(find.text('Net: you will receive Rs 700')),
-        findsOneWidget,
-      );
+      // One side only, so no "Net" line is needed.
+      expect(inDetails(find.text('Rs 700')), findsOneWidget);
+      expect(inDetails(find.textContaining('Net:')), findsNothing);
       expect(tester.takeException(), isNull);
 
       // On a narrow screen a tap opens the details as a dialog instead.
@@ -203,11 +205,11 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        // All four: Owes and Both owe Rs 1,000 each; Company and Both are
-        // owed Rs 300 each.
+        // All four: Owes owes Rs 1,000 and Both Rs 700 (its Rs 300 set
+        // off); Company is owed Rs 300.
         expect(count(), '4', reason: '$size');
-        expect(total('Rs 2,000'), findsOneWidget);
-        expect(total('Rs 600'), findsOneWidget);
+        expect(total('Rs 1,700'), findsOneWidget);
+        expect(total('Rs 300'), findsOneWidget);
         expect(total('You will receive'), findsOneWidget);
         expect(total('You will pay'), findsOneWidget);
         // On the title's line, on its far side.
@@ -219,13 +221,14 @@ void main() {
         // The figures are for the parties the list shows.
         await tester.tap(find.widgetWithText(ChoiceChip, 'You will pay'));
         await tester.pumpAndSettle();
-        expect(count(), '2'); // Company and Both
-        expect(total('Rs 1,000'), findsOneWidget);
-        expect(total('Rs 600'), findsOneWidget);
+        expect(count(), '1'); // Company
+        expect(total('Rs 0'), findsOneWidget);
+        expect(total('Rs 300'), findsOneWidget);
         expect(tester.takeException(), isNull);
       }
-      // No party is numbered.
-      expect(find.text('1'), findsNothing);
+      // No party is numbered: the only "1" is the count of the one party.
+      expect(count(), '1');
+      expect(find.text('1'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox.shrink());
       app.dispose();

@@ -46,8 +46,9 @@ void main() {
     expect(payable['date'], '2026-10-01');
     expect(receivable['reference'], contains('-20261001-'));
     expect(app.bookAt('2026-09-30').receivable(ali.id), 0);
-    expect(app.bookAt('2026-10-01').receivable(ali.id), 500000);
-    expect(app.bookAt('2026-10-01').payable(ali.id), 120000);
+    // The two openings are set off against each other.
+    expect(app.bookAt('2026-10-01').receivable(ali.id), 380000);
+    expect(app.bookAt('2026-10-01').payable(ali.id), 0);
 
     // An account too.
     await app.saveMaster(

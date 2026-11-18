@@ -204,11 +204,17 @@ void main() {
         r.read<String>('key'): r.read<String>('value'),
     };
     // Everything a khata can hold besides entries: a bank account, a saved
-    // day and its batch, a draft, a recovery copy and sync state.
+    // day and its batch, drafts, a recovery copy and sync state.
     Future<void> fill(AppController app, String party) async {
       await app.saveMaster('account', {'name': 'HBL', 'bank': 'HBL'});
       await receipt(app, party, 10000);
       await app.startBatch();
+      await app.saveEntryDraft(
+        source: EntryDraft.roznamcha,
+        tab: 'aamad',
+        date: '2026-01-02',
+        data: {'party': party, 'q11800': '2'},
+      );
       app.composerDrafts['context:purchase'] = {'amount': '5'};
       await app.db.setMeta('pre_restore', '{"old":"copy"}');
       await app.db.setMeta('cursor', '7');
@@ -244,6 +250,7 @@ void main() {
     expect(o.app.rozDrafts, isEmpty);
     expect(o.app.selectedDate, businessDate());
     expect(o.app.composerDrafts, isEmpty);
+    expect(o.app.entryDrafts, isEmpty);
     expect(await meta(o.app), {
       'device': device,
       'language': 'en',
@@ -261,6 +268,8 @@ void main() {
       expect(o.app.batchStarts, isNotEmpty);
       expect(await o.app.db.meta('pre_restore'), '{"old":"copy"}');
       expect(await o.app.db.meta('cursor'), '7');
+      // Saved drafts are stored, so each keeps its own.
+      expect(o.app.entryDrafts.map((d) => d.data['party']), [party]);
     }
 
     // Now reset the second: the first and the already empty third stay as

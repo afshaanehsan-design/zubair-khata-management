@@ -455,11 +455,14 @@ Future<void> main() async {
       ))
         row.first: row.last,
     };
+    // The khata goes up by 7000; `p` holds an advance on `ar:` here, so the
+    // set-off moves the amount there (202611170001_party_set_off.sql).
     check(
       wapsi['status'] == 'accepted' &&
           wapsiStored['form'] == 'udharWapsi' &&
           wapsiStored['supplierPayment'] == true &&
-          wapsiPostings['ap:p'] == '7000' &&
+          integer(wapsiPostings['ap:p']) + integer(wapsiPostings['ar:p']) ==
+              7000 &&
           wapsiPostings['money:cash'] == '-7000',
       'Udhar wapsi keeps its form and reduces the payable like the client: $wapsiPostings',
     );
@@ -1601,6 +1604,78 @@ Future<void> main() async {
       'A chosen share\'s gas can be returned',
     );
     await sameAsClient('A returned chosen share gives the purchase back like the client');
+    // Set-off (202611170001_party_set_off.sql): a purchase from a customer
+    // who owes you lowers what he owes; only one side is left.
+    Future<Map<String?, String?>> sides(String party) async => {
+      for (final row in await pg.query(
+        "select account,sum(debit)::text from public.khata_postings where owner_id='$owner' and account in ('ar:$party','ap:$party') group by account",
+      ))
+        row[0]: row[1],
+    };
+    check(
+      (await apply(
+            command([
+              change('so', 'party', {'name': 'Atif', 'customer': true}),
+              change('so-sale', 'document', {
+                'type': 'sale',
+                'date': '2026-11-21',
+                'occurredAt': 1,
+                'party': 'so',
+                'quantities': {'11800': 10},
+                'rate': 300000,
+              }),
+            ]),
+          ))['status'] ==
+          'accepted',
+      'A customer owes for a sale',
+    );
+    final soPurchase = command([
+      change('so-purchase', 'document', {
+        'type': 'purchase',
+        'date': '2026-11-21',
+        'occurredAt': 2,
+        'party': 'so',
+        'grams': 100000,
+        'rate': 50000,
+        'rateUnit': 1000,
+        'account': 'cash',
+        'amount': 0,
+      }),
+    ]);
+    check(
+      (await apply(soPurchase))['status'] == 'accepted',
+      'A purchase from the same customer is accepted',
+    );
+    final setOff = await sides('so');
+    check(
+      setOff['ar:so'] == '0' && setOff['ap:so'] == '-2000000',
+      'The purchase is set off against what he owes: $setOff',
+    );
+    await sameAsClient('A set-off posts like the client');
+    check(
+      (await apply(
+            command(
+              [
+                change('so-purchase', 'document', {
+                  ...((soPurchase['changes'] as List).single as Map)['data']
+                      as Map<String, dynamic>,
+                  'voided': true,
+                  'voidReason': 'Entered twice',
+                }, 1),
+              ],
+              action: 'void',
+              reason: 'Entered twice',
+            ),
+          ))['status'] ==
+          'accepted',
+      'The set-off purchase can be voided',
+    );
+    final unset = await sides('so');
+    check(
+      unset['ar:so'] == '3000000' && unset['ap:so'] == null,
+      'Voiding the purchase brings the receivable back: $unset',
+    );
+    await sameAsClient('A voided set-off posts like the client');
     final head = jsonDecode(
       (await pg.query('select public.sync_status()::text')).single.single!,
     ) as Map;

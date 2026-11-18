@@ -85,7 +85,11 @@ Future<void> clearExportCopies(String organization) async {
 /// the PDF prints its content ([ReportExporter.size]); what is saved, shared
 /// or printed is the PDF shown. The size is remembered for each kind of
 /// report ([AppController.pdfSize]).
-Future<void> previewReport(BuildContext context, Report report) async {
+Future<void> previewReport(
+  BuildContext context,
+  Report report, {
+  ValueChanged<bool>? onCompact,
+}) async {
   final app = context.findAncestorWidgetOfExactType<KhataApp>()?.app;
   final kind = report.kind.isEmpty ? report.title : report.kind;
   var current = report;
@@ -130,14 +134,18 @@ Future<void> previewReport(BuildContext context, Report report) async {
               ctx,
               title: report.title,
               // Compact (Roznamcha) or Details (the day's pending balances).
-              switchLabel: report.roznamchaSheets == null
+              switchLabel:
+                  report.roznamchaSheets == null && report.compactView == null
                   ? null
                   : report.sheetSwitch,
               compact: current.compact,
-              onCompact: (value) => setState(() {
-                current = current.withCompact(value);
-                rebuild();
-              }),
+              onCompact: (value) {
+                setState(() {
+                  current = current.withCompact(value);
+                  rebuild();
+                });
+                onCompact?.call(value);
+              },
               size: shown,
               onSliding: (v) => setState(() => shown = v),
               onSize: resize,

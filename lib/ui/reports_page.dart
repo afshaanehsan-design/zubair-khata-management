@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../core/controller.dart';
 import '../core/models.dart';
+import '../features/reports/daily_report.dart';
 import '../features/reports/reports.dart';
 import 'components.dart';
 import 'export_ui.dart';
@@ -22,9 +23,10 @@ class _ReportsPageState extends State<ReportsPage> {
       account = '';
   bool? urdu;
   bool exporting = false;
+  bool compact = false;
   @override
   Widget build(BuildContext context) {
-    final report = buildReport(
+    final report = buildReportView(
       widget.app,
       selected,
       from,
@@ -32,6 +34,7 @@ class _ReportsPageState extends State<ReportsPage> {
       party: party.isEmpty ? null : party,
       account: account.isEmpty ? null : account,
       urdu: urdu ?? widget.app.urdu,
+      compact: compact,
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -151,6 +154,17 @@ class _ReportsPageState extends State<ReportsPage> {
                             selected: urdu ?? widget.app.urdu,
                             onSelected: (v) => setState(() => urdu = v),
                           ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(ctx.t('Compact')),
+                              Switch(
+                                key: const ValueKey('reports-compact'),
+                                value: compact,
+                                onChanged: (v) => setState(() => compact = v),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                       const SizedBox(height: 18),
@@ -161,7 +175,15 @@ class _ReportsPageState extends State<ReportsPage> {
                           FilledButton.icon(
                             onPressed: exporting
                                 ? null
-                                : () => previewReport(ctx, report),
+                                : () => previewReport(
+                                    ctx,
+                                    report,
+                                    onCompact: (value) {
+                                      if (mounted) {
+                                        setState(() => compact = value);
+                                      }
+                                    },
+                                  ),
                             icon: const Icon(
                               Icons.picture_as_pdf_outlined,
                               size: 18,
@@ -285,37 +307,37 @@ class _ReportDataTableState extends State<ReportDataTable> {
         // it in another horizontal scroll view gives it infinite width and
         // its stretched header/footer fail to lay out.
         : PaginatedDataTable(
-              key: ValueKey(
-                '${widget.report.title}|${widget.report.subtitle}|${widget.report.urdu}',
-              ),
-              headingRowColor: const WidgetStatePropertyAll(Color(0xfff1f5ed)),
-              columnSpacing: 22,
-              horizontalMargin: 16,
-              dataRowMinHeight: 50,
-              dataRowMaxHeight: 100,
-              showFirstLastButtons: true,
-              rowsPerPage: widget.report.rows.length < 10
-                  ? widget.report.rows.length
-                  : 10,
-              columns: widget.report.columns
-                  .map(
-                    (label) => DataColumn(
-                      label: SizedBox(
-                        width: 125,
-                        child: Text(
-                          label,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: muted,
-                          ),
+            key: ValueKey(
+              '${widget.report.title}|${widget.report.subtitle}|${widget.report.urdu}|${widget.report.compact}',
+            ),
+            headingRowColor: const WidgetStatePropertyAll(Color(0xfff1f5ed)),
+            columnSpacing: 22,
+            horizontalMargin: 16,
+            dataRowMinHeight: 50,
+            dataRowMaxHeight: 100,
+            showFirstLastButtons: true,
+            rowsPerPage: widget.report.rows.length < 10
+                ? widget.report.rows.length
+                : 10,
+            columns: widget.report.columns
+                .map(
+                  (label) => DataColumn(
+                    label: SizedBox(
+                      width: 125,
+                      child: Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: muted,
                         ),
                       ),
                     ),
-                  )
-                  .toList(),
-              source: _ReportSource(widget.report),
-            ),
+                  ),
+                )
+                .toList(),
+            source: _ReportSource(widget.report),
+          ),
   );
 }
 

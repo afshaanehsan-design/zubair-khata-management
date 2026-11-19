@@ -12,6 +12,7 @@ import 'details.dart';
 import 'entry_composer.dart';
 import 'export_ui.dart';
 import 'masters.dart';
+import 'profit_ui.dart';
 import 'roznamcha_form.dart';
 import 'roznamcha_widgets.dart' show confirmPlain;
 
@@ -984,7 +985,7 @@ class StockPage extends StatelessWidget {
           ),
         ]),
         const SizedBox(height: 20),
-        for (final warning in b.warnings) Notice(warning),
+        for (final warning in stockWarnings(app, b)) Notice(warning),
         if (b.documents.any(
           (d) =>
               d.type == EntryType.sale &&
@@ -1024,6 +1025,13 @@ class StockPage extends StatelessWidget {
               icon: const Icon(Icons.tune),
               label: Text(context.t('Stock adjustment')),
             ),
+            if (needsGasPrice(app))
+              OutlinedButton.icon(
+                key: const ValueKey('stock-purchase-price'),
+                onPressed: () => editGasPrices(context, app),
+                icon: const Icon(Icons.price_change_outlined),
+                label: Text(context.t('Purchase price')),
+              ),
             TextButton(
               onPressed: () => previewReport(
                 context,
@@ -1039,6 +1047,8 @@ class StockPage extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 22),
+        StockProfit(app),
         // Gas is tracked by KG and cylinder fills are never entered, so the
         // shop's full/empty counts are not shown; only cylinders customers
         // still hold, and only when there are any.

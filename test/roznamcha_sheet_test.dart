@@ -610,9 +610,10 @@ void main() {
         '2026-10-20',
         '2026-10-27',
       );
-      expect(range.sheets.map((s) => s.date), ['2026-10-24', day]);
+      // Newest day first.
+      expect(range.sheets.map((s) => s.date), [day, '2026-10-24']);
       // The day before holds only the starting cash.
-      final before = range.sheets.first;
+      final before = range.sheets.last;
       expect(cells(before.table('Bank Nikali / Less / Opening')!.body), [
         [
           '1',

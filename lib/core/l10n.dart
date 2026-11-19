@@ -20,6 +20,7 @@ class Words {
     'Money': 'رقم',
     'Stock': 'اسٹاک',
     'Reports': 'رپورٹس',
+    'Report': 'رپورٹ',
     'Settings': 'ترتیبات',
     'More': 'مزید',
     'New entry': 'نیا اندراج',
@@ -826,6 +827,60 @@ class Words {
     'Gas in': 'آئی گیس',
     'Gas out': 'گئی گیس',
     '— Koi entry nahi —': '— کوئی اندراج نہیں —',
+    // Profit: "How profit is calculated", hospitality and the user's prices
+    // for gas without a cost (19 November 2026).
+    'How profit is calculated': 'منافع کیسے بنا',
+    'Sale − gas ki khareed − hospitality − kharcha = munafa.':
+        'سیل − گیس کی خرید − ہاسپٹیلٹی − خرچہ = منافع۔',
+    'Sales': 'سیل',
+    '{kg} KG of gas sold': '{kg} کلو گیس فروخت ہوئی',
+    'Purchase price, oldest stock first (FIFO)':
+        'خرید کی قیمت، پہلے پرانا اسٹاک (FIFO)',
+    'Negative stock (gas sold before its purchase)':
+        'منفی اسٹاک (خرید سے پہلے فروخت ہوئی گیس)',
+    'Stock entered without cost': 'بغیر لاگت درج اسٹاک',
+    '{kg} KG: purchase price not entered': '{kg} کلو: خرید کی قیمت درج نہیں',
+    'purchase price not entered': 'خرید کی قیمت درج نہیں',
+    'your price': 'آپ کی قیمت',
+    'Purchase price': 'خرید کی قیمت',
+    'per ton': 'فی ٹن',
+    'Hospitality': 'ہاسپٹیلٹی',
+    'Change': 'تبدیل کریں',
+    'Less / discount': 'لیس / رعایت',
+    'Gas stock loss': 'گیس اسٹاک کا نقصان',
+    'Profit is incomplete: {kg} KG have no purchase price.':
+        'منافع نامکمل ہے: {kg} کلو کی خرید کی قیمت نہیں۔',
+    'Purchase shares ({kg} KG) are at cost: not in sales, cost or hospitality.': 'خرید میں حصے ({kg} کلو) اصل لاگت پر ہیں: سیل، لاگت یا ہاسپٹیلٹی میں شامل نہیں۔',
+    'Gas without a purchase price is counted at your price until its purchase is entered. The khata does not change.': 'جس گیس کی خرید کی قیمت درج نہیں وہ آپ کی قیمت پر گنی جاتی ہے جب تک اس کی خرید درج نہ ہو۔ کھاتہ نہیں بدلتا۔',
+    'Historical summaries make profit provisional.':
+        'پرانے فروخت خلاصوں کی وجہ سے منافع عارضی ہے۔',
+    'Day': 'دن',
+    'This month': 'اس مہینے',
+    'Up to {date}': '{date} تک',
+    '{amount} for {kg} KG': '{kg} کلو کے لیے {amount}',
+    'Purchase price for profit': 'منافع کے لیے خرید کی قیمت',
+    'Profit counts gas that has no purchase price in the khata at the price you enter here, until its purchase is entered. Balances, stock and entries do not change.': 'جس گیس کی خرید کی قیمت کھاتے میں نہیں، منافع اسے یہاں درج قیمت پر گنتا ہے جب تک اس کی خرید درج نہ ہو۔ بیلنس، اسٹاک اور اندراجات نہیں بدلتے۔',
+    '{kg} KG were sold before their purchase was entered.':
+        '{kg} کلو خرید درج ہونے سے پہلے فروخت ہوئے۔',
+    'All gas sold has its purchase price now. There is nothing to enter.':
+        'فروخت ہونے والی ساری گیس کی خرید کی قیمت اب موجود ہے۔ کچھ درج کرنے کی ضرورت نہیں۔',
+    '{kg} KG were sold from stock entered without a cost:':
+        '{kg} کلو بغیر لاگت درج اسٹاک سے فروخت ہوئے:',
+    'Leave a rate empty to remove its price.':
+        'قیمت ہٹانے کے لیے ریٹ خالی چھوڑ دیں۔',
+    'From the start': 'شروع سے',
+    'From {date}': '{date} سے',
+    'Paid on every ton (1000 KG) of gas sold. Purchase shares are not counted.': 'فروخت ہونے والی گیس کے ہر ٹن (1000 کلو) پر ادا ہوتی ہے۔ خرید میں حصے شامل نہیں۔',
+    'Rs per ton (1000 KG)': 'روپے فی ٹن (1000 کلو)',
+    'Earlier days too': 'پچھلے دنوں پر بھی',
+    'For every day': 'ہر دن کے لیے',
+    'From {date} on; earlier days keep their rate':
+        '{date} سے آگے؛ پچھلے دنوں کا ریٹ وہی رہے گا',
+    'Profit uses your purchase price': 'منافع میں آپ کی خرید کی قیمت شامل ہے',
+    'Gas at your price': 'آپ کی قیمت پر گیس',
+    'Other kharcha': 'دیگر خرچہ',
+    'ton': 'ٹن',
+    'Business profile is missing': 'کاروبار کی پروفائل موجود نہیں',
   };
 }
 

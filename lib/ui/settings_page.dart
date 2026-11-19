@@ -887,6 +887,10 @@ Future<void> editProfile(
             final ok = await perform(ctx, () async {
               await app.commit([
                 Change('business', 'settings', {
+                  // Whatever else the profile holds (profit settings, or a
+                  // proposal's under review) stays as it is.
+                  ...original.data,
+                  ...?proposed,
                   'name': fields['name']!.text.trim(),
                   'phone': fields['phone']!.text.trim(),
                   'address': fields['address']!.text.trim(),

@@ -285,17 +285,18 @@ void main() {
       '2026-11-03',
     );
     expect(detailedRange.compact, isFalse);
-    expect(detailedRange.sheets.first.tables.first.body, hasLength(4));
+    // Newest day first.
+    expect(detailedRange.sheets.last.tables.first.body, hasLength(4));
     final range = detailedRange.withCompact(true);
     expect(range.compact, isTrue);
     expect(range.sheets, hasLength(2));
-    expect(range.sheets.first.tables.first.body, hasLength(2));
+    expect(range.sheets.last.tables.first.body, hasLength(2));
     expect(
-      range.sheets.first.tables.first.body.first[9].lines.first.single.text,
+      range.sheets.last.tables.first.body.first[9].lines.first.single.text,
       '67,000',
     );
     expect(
-      range.sheets.last.tables.first.body.single[9].lines.first.single.text,
+      range.sheets.first.tables.first.body.single[9].lines.first.single.text,
       '5,000',
     );
     final detailedHistory = snapshotReport(app, saved);

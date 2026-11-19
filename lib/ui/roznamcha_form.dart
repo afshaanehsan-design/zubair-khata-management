@@ -7,7 +7,7 @@ import '../features/ledger/roznamcha.dart';
 import '../features/reports/reports.dart';
 import 'components.dart';
 import 'drafts.dart';
-import 'entry_composer.dart' show composeEntry;
+import 'entry_composer.dart' show EntryComposer;
 import 'roznamcha_widgets.dart';
 
 /// The "Naya Entry" tabs of the original Roznamcha page, in the same order.
@@ -281,8 +281,18 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   Document? editing;
 
   /// The saved draft ([AppController.entryDrafts]) loaded into the form, if
-  /// any. Add turns it into an entry and deletes it; Draft updates it.
+  /// any. Add turns it into an entry and deletes it; Draft updates it. Opened
+  /// from the Drafts tab it is edited in its own row of the list
+  /// ([showDrafts] stays on); the ✏️ of a draft row opens it in the dialog
+  /// on its own tab instead.
   EntryDraft? openDraft;
+
+  /// The day of [openDraft]: its own date unless changed while it is open.
+  String? draftDate;
+
+  /// A composer draft (purchase, stock, cylinders…) open in its row of the
+  /// Drafts tab. The composer keeps its own values.
+  EntryDraft? openComposer;
 
   /// The Drafts tab is showing instead of a form.
   bool showDrafts = false;
@@ -290,7 +300,9 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   final _suggest = <String, List<String>>{};
 
   AppController get app => widget.app;
-  String get date => pickedDate ?? editing?.date ?? app.selectedDate;
+  String get date => openDraft != null
+      ? draftDate ?? openDraft!.date
+      : pickedDate ?? editing?.date ?? app.selectedDate;
   String _draftKey(RozTab t) =>
       '${widget.dialog ? 'dialog' : 'page'}:${t.name}';
 
@@ -300,9 +312,16 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   String get _openKey => '${widget.dialog ? 'dialog' : 'page'}:open';
 
   /// The Drafts tab is offered on the Roznamcha page and the New entry
-  /// dialog, not in a party's khata, while correcting or with a draft open.
+  /// dialog, not in a party's khata, while correcting or with a draft open
+  /// on its own tab.
   bool get _draftsTab =>
-      editing == null && openDraft == null && widget.initialParty == null;
+      editing == null &&
+      widget.initialParty == null &&
+      (openDraft == null || showDrafts);
+
+  /// The draft open in its row of the Drafts tab, if any.
+  String? get _openInList =>
+      showDrafts ? openDraft?.id ?? openComposer?.id : null;
 
   @override
   void initState() {
@@ -313,12 +332,12 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       tab = RozTab.values.byName(draft.tab);
       _restore(draft.data);
       openDraft = draft;
-      pickedDate = draft.date;
+      draftDate = draft.date;
     } else if (widget.replace != null && rozEditable(widget.replace!)) {
       edit(widget.replace!, notify: false);
     } else if (widget.initialParty == null) {
       _restoreIdle();
-      showDrafts = widget.initialDrafts && openDraft == null;
+      if (widget.initialDrafts && openDraft == null) showDrafts = true;
     } else {
       _restore(app.rozDrafts[_draftKey(tab)]);
       c['party']!.text = app.name(widget.initialParty!);
@@ -328,23 +347,34 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   }
 
   /// What the form shows when no entry is being corrected: the saved draft
-  /// that was open (if it still exists), else this tab's unsaved values.
+  /// that was open (if it still exists), in its row of the Drafts tab or on
+  /// its own tab as before, else this tab's unsaved values.
   void _restoreIdle() {
     final open = app.rozDrafts[_openKey];
     final draft = open == null ? null : app.entryDraft('${open['draftId']}');
+    final inList = open?['inList'] == true;
     final openTab = RozTab.values
         .where((v) => v.name == open?['draftTab'])
         .firstOrNull;
-    if (draft != null && openTab != null) {
+    openDraft = null;
+    openComposer = null;
+    draftDate = null;
+    if (draft != null && inList && draft.source == EntryDraft.composer) {
+      openComposer = draft;
+      showDrafts = true;
+      _restore(app.rozDrafts[_draftKey(tab)]);
+    } else if (draft != null &&
+        draft.source == EntryDraft.roznamcha &&
+        openTab != null) {
       tab = openTab;
       _restore(open);
       openDraft = draft;
-      if (widget.dialog && open?['pickedDate'] is String) {
-        pickedDate = open!['pickedDate'] as String;
+      showDrafts = inList;
+      if (open?['draftDate'] is String) {
+        draftDate = open!['draftDate'] as String;
       }
     } else {
       app.rozDrafts.remove(_openKey);
-      openDraft = null;
       _restore(app.rozDrafts[_draftKey(tab)]);
     }
     if (c['rate']!.text.isEmpty) c['rate']!.text = _lastRate();
@@ -456,10 +486,21 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         ..._snapshot(),
         'draftId': draft.id,
         'draftTab': tab.name,
-        if (pickedDate != null) 'pickedDate': pickedDate,
+        if (showDrafts) 'inList': true,
+        if (draftDate != null) 'draftDate': draftDate,
       };
-    } else {
-      app.rozDrafts[_draftKey(tab)] = _snapshot();
+      return;
+    }
+    app.rozDrafts[_draftKey(tab)] = _snapshot();
+    final composer = openComposer;
+    if (composer != null) {
+      // Which composer draft is open in the list; its values are the
+      // composer's own (AppController.composerDrafts).
+      app.rozDrafts[_openKey] = {
+        'draftId': composer.id,
+        'source': EntryDraft.composer,
+        'inList': true,
+      };
     }
   }
 
@@ -483,42 +524,76 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     });
   }
 
-  /// Opens a saved draft: a Roznamcha one in this form, on its own tab and
-  /// day (the top bar's day moves to it), a composer one in the composer.
-  Future<void> openSavedDraft(EntryDraft d) async {
-    if (d.source == EntryDraft.composer) {
-      final type = EntryType.values.where((v) => v.name == d.tab).firstOrNull;
-      if (type != null) await composeEntry(context, app, type: type, draft: d);
-      return;
-    }
+  /// Opens a saved draft in its own row of the Drafts tab, to finish it
+  /// there: a Roznamcha one with this form's fields for its tab, a composer
+  /// one in the composer. It keeps its own day; the top bar's stays.
+  void openSavedDraft(EntryDraft d) {
+    if (!showDrafts || openDraft != null || openComposer != null) return;
+    final composer = d.source == EntryDraft.composer;
     final t = RozTab.values.where((v) => v.name == d.tab).firstOrNull;
-    if (t == null || !_draftsTab) return;
+    if (!composer && t == null) return;
     _remember();
     setState(() {
-      tab = t;
-      showDrafts = false;
       error = null;
       success = null;
-      _restore(d.data);
-      openDraft = d;
-      if (c['rate']!.text.isEmpty) c['rate']!.text = _lastRate();
-      if (widget.dialog) pickedDate = d.date;
+      if (composer) {
+        openComposer = d;
+      } else {
+        tab = t!;
+        _restore(d.data);
+        openDraft = d;
+        draftDate = d.date;
+        if (c['rate']!.text.isEmpty) c['rate']!.text = _lastRate();
+      }
     });
-    if (!widget.dialog) app.setDate(d.date);
     _remember();
   }
 
-  /// Puts the open draft back unchanged and returns to this tab's values.
+  /// Puts the open draft back unchanged: back to the Drafts list when it was
+  /// open there, else to this tab's values.
   void cancelDraft() {
     if (openDraft == null) return;
     setState(() {
       app.rozDrafts.remove(_openKey);
-      openDraft = null;
-      pickedDate = null;
       error = null;
       success = null;
       _restoreIdle();
     });
+  }
+
+  /// The composer of the draft open in the Drafts tab is done: [message]
+  /// after Add or Draft, null after Cancel. The list shows again.
+  void _composerClosed(String? message) {
+    if (!mounted) return;
+    setState(() {
+      app.rozDrafts.remove(_openKey);
+      openComposer = null;
+      error = null;
+      success = message;
+    });
+  }
+
+  /// A draft open in the Drafts tab that was finished or deleted elsewhere
+  /// (its ✏️ in the day's table) is open no more.
+  void _closeIfGone() {
+    final id = _openInList;
+    if (id == null || app.entryDraft(id) != null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final id = _openInList;
+      if (!mounted || id == null || app.entryDraft(id) != null) return;
+      setState(() {
+        app.rozDrafts.remove(_openKey);
+        _restoreIdle();
+      });
+    });
+  }
+
+  /// The date button of a draft open in the Drafts tab.
+  Future<void> _pickDraftDate() async {
+    final v = await pickDate(context, date);
+    if (v == null || !mounted || openDraft == null) return;
+    setState(() => draftDate = v);
+    _remember();
   }
 
   /// Nothing typed yet (the rate is filled in by itself, and inside a khata
@@ -581,8 +656,6 @@ class RoznamchaFormState extends State<RoznamchaForm> {
           _clearAfterSave();
         } else {
           app.rozDrafts.remove(_openKey);
-          openDraft = null;
-          pickedDate = null;
           _restoreIdle();
         }
         success = '${context.t('Draft mein save ho gaya')}: $name';
@@ -595,7 +668,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
   }
 
   void selectTab(RozTab t) {
-    if (editing != null || openDraft != null) return;
+    if (editing != null || openDraft != null || openComposer != null) return;
     if (t == tab) {
       if (showDrafts) setState(() => showDrafts = false);
       return;
@@ -630,6 +703,8 @@ class RoznamchaFormState extends State<RoznamchaForm> {
       // An open saved draft waits (its values are kept under [_openKey])
       // and comes back when the correction is done or cancelled.
       openDraft = null;
+      openComposer = null;
+      draftDate = null;
       showDrafts = false;
       tab = t;
       kind = k;
@@ -1191,10 +1266,9 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         final wasEditing = replace != null;
         editing = null;
         if (draft != null) {
-          // Back to what this tab held before the draft was opened.
+          // Back to the Drafts list, or to what this tab held before the
+          // draft was opened.
           app.rozDrafts.remove(_openKey);
-          openDraft = null;
-          pickedDate = null;
           _restoreIdle();
         } else if (wasEditing &&
             widget.initialParty == null &&
@@ -1207,7 +1281,9 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         success =
             '${context.t(wasEditing ? 'Update ho gaya' : 'Save ho gaya')}: $summary';
       });
-      if (_usesParty && MediaQuery.sizeOf(context).width >= 700) {
+      if (!showDrafts &&
+          _usesParty &&
+          MediaQuery.sizeOf(context).width >= 700) {
         partyFocus.requestFocus();
       }
     } catch (e) {
@@ -2129,7 +2205,8 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     runSpacing: 8,
     children: [
       for (final t in RozTab.values)
-        if ((editing == null && openDraft == null) || t == tab)
+        if ((editing == null && openDraft == null && openComposer == null) ||
+            (t == tab && !showDrafts))
           _chip(
             key: 'roz-tab-${t.name}',
             icon: t.icon,
@@ -2152,43 +2229,100 @@ class RoznamchaFormState extends State<RoznamchaForm> {
     ],
   );
 
-  /// The Drafts tab's content: every saved draft, to open or delete. It
-  /// follows the controller itself, since the dialog form has nothing else
-  /// that redraws it when a draft is deleted or finished.
+  /// The Drafts tab's content: every saved draft, to open or delete, the one
+  /// open with its fields in its own row. It follows the controller itself,
+  /// since the dialog form has nothing else that redraws it when a draft is
+  /// deleted or finished.
   Widget _draftsBody() => ListenableBuilder(
     listenable: app,
-    builder: (context, _) => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-          child: _tabs(),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-          decoration: const BoxDecoration(
-            color: rozSoft,
-            border: Border.symmetric(horizontal: BorderSide(color: rozBorder)),
+    builder: (context, _) {
+      _closeIfGone();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+            child: _tabs(),
           ),
-          child: Text(
-            context.t(
-              'Adhoori entries jo Draft mein rakhi hain. Kholein, poori karein aur Add karein.',
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+            decoration: const BoxDecoration(
+              color: rozSoft,
+              border: Border.symmetric(
+                horizontal: BorderSide(color: rozBorder),
+              ),
             ),
-            style: const TextStyle(fontSize: 12.5, color: muted),
+            child: Text(
+              context.t(
+                'Adhoori entries jo Draft mein rakhi hain. Kholein, poori karein aur Add karein.',
+              ),
+              style: const TextStyle(fontSize: 12.5, color: muted),
+            ),
           ),
-        ),
-        Container(
-          color: rozSoft,
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          child: DraftList(app: app, onOpen: openSavedDraft),
-        ),
-      ],
-    ),
+          Container(
+            color: rozSoft,
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // What happened to the draft that was open.
+                if (success != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _successLine(),
+                  ),
+                DraftList(
+                  app: app,
+                  onOpen: openSavedDraft,
+                  openId: _openInList,
+                  editor: _draftEditor,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    },
   );
 
-  Widget _body() {
-    if (showDrafts) return _draftsBody();
+  /// The open draft's fields in its row of the Drafts tab: a composer draft
+  /// in the composer, a Roznamcha one in this form.
+  Widget _draftEditor(EntryDraft d) => d.source == EntryDraft.composer
+      ? EntryComposer(
+          key: ValueKey('draft-composer-${d.id}'),
+          app: app,
+          initial: EntryType.values.where((v) => v.name == d.tab).firstOrNull,
+          draft: d,
+          onClosed: _composerClosed,
+        )
+      : _body(inRow: true);
+
+  Widget _successLine() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      const Icon(Icons.check_circle_rounded, color: teal, size: 18),
+      const SizedBox(width: 6),
+      Flexible(
+        child: Text(
+          success!,
+          style: const TextStyle(
+            color: teal,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    ],
+  );
+
+  /// The form: the tabs, what is being corrected or finished, the tab's
+  /// description, its fields with the preview, and the buttons. [inRow] is
+  /// the row of a draft open in the Drafts tab: its day instead of the tabs,
+  /// then the fields, the preview and the buttons.
+  Widget _body({bool inRow = false}) {
+    if (showDrafts && !inRow) return _draftsBody();
     final preview = _preview();
     final notInKhata = _notInKhata();
     final closed = app.isClosed(date);
@@ -2201,10 +2335,28 @@ class RoznamchaFormState extends State<RoznamchaForm> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-            child: _tabs(),
-          ),
+          if (inRow)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: OutlinedButton.icon(
+                key: const ValueKey('roz-draft-date'),
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: saving ? null : _pickDraftDate,
+                icon: const Icon(Icons.calendar_today_outlined, size: 15),
+                label: Text(
+                  dmy(date),
+                  textDirection: TextDirection.ltr,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: _tabs(),
+            ),
           if (editing != null)
             Container(
               color: rozAccentSoft,
@@ -2226,7 +2378,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                 ],
               ),
             ),
-          if (openDraft != null)
+          if (openDraft != null && !inRow)
             Container(
               key: const ValueKey('roz-draft-open'),
               color: rozAccentSoft,
@@ -2249,22 +2401,25 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                 ],
               ),
             ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-            decoration: const BoxDecoration(
-              color: rozSoft,
-              border: Border.symmetric(
-                horizontal: BorderSide(color: rozBorder),
+          if (!inRow)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              decoration: const BoxDecoration(
+                color: rozSoft,
+                border: Border.symmetric(
+                  horizontal: BorderSide(color: rozBorder),
+                ),
+              ),
+              child: Text(
+                context.t(tab.description),
+                style: const TextStyle(fontSize: 12.5, color: muted),
               ),
             ),
-            child: Text(
-              context.t(tab.description),
-              style: const TextStyle(fontSize: 12.5, color: muted),
-            ),
-          ),
           Container(
-            color: rozSoft,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            color: inRow ? null : rozSoft,
+            padding: inRow
+                ? const EdgeInsets.only(top: 12)
+                : const EdgeInsets.fromLTRB(16, 14, 16, 14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
@@ -2327,27 +2482,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                               ),
                             )
                           : success != null
-                          ? Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.check_circle_rounded,
-                                  color: teal,
-                                  size: 18,
-                                ),
-                                const SizedBox(width: 6),
-                                Flexible(
-                                  child: Text(
-                                    success!,
-                                    style: const TextStyle(
-                                      color: teal,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            )
+                          ? _successLine()
                           : Text(
                               '${context.t('Tareekh')}: ${dmy(date)}',
                               style: const TextStyle(
@@ -2475,7 +2610,13 @@ class RoznamchaFormState extends State<RoznamchaForm> {
                 onPressed: () async {
                   final v = await pickDate(context, date);
                   if (v != null) {
-                    setState(() => pickedDate = v);
+                    setState(() {
+                      if (openDraft != null) {
+                        draftDate = v;
+                      } else {
+                        pickedDate = v;
+                      }
+                    });
                     // An open draft keeps its new day while being finished.
                     if (openDraft != null) _remember();
                   }

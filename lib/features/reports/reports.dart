@@ -22,6 +22,7 @@ import '../ledger/entry_facts.dart'
         entryHeadline,
         entryTitle,
         entryTypeLabel;
+import '../ledger/profit.dart' show GasPrice;
 import '../ledger/roznamcha.dart';
 import 'report_sheet.dart';
 import 'roznamcha_sheet.dart';
@@ -195,7 +196,8 @@ Report buildReport(
     case 'Overdue':
       columns = ['Name', 'Reference', 'Date', 'Due date', 'Outstanding'];
       var due = 0;
-      for (final d in book.documents.where(
+      // Newest first, like every list of entries in the reports.
+      for (final d in book.documents.reversed.where(
         (d) =>
             d.type == EntryType.sale &&
             '${d.data['dueDate'] ?? ''}'.isNotEmpty &&
@@ -382,7 +384,9 @@ Report buildReport(
         'Direct to party',
         'Closing',
       ];
-      final days = {from, to, ...docs.map((d) => d.date)}.toList()..sort();
+      // Newest day first.
+      final days = {from, to, ...docs.map((d) => d.date)}.toList()
+        ..sort((a, b) => b.compareTo(a));
       // The sheet: one table a day, of the parties with any figure that day,
       // and the activity of the whole range as the summary.
       final range = List.filled(6, 0);
@@ -523,7 +527,7 @@ Report buildReport(
         'Balance',
       ];
       final sums = List.filled(8, 0);
-      for (final d in docs.where(
+      for (final d in docs.reversed.where(
         (d) =>
             !d.purchaseShare &&
             [
@@ -587,7 +591,7 @@ Report buildReport(
         'Share from',
       ];
       var grams = 0, charged = 0, costs = 0;
-      for (final d in docs.where(
+      for (final d in docs.reversed.where(
         (d) =>
             d.bulkAtCost &&
             [EntryType.sale, EntryType.creditNote].contains(d.type),
@@ -632,7 +636,9 @@ Report buildReport(
         'Paid now',
       ];
       var grams = 0, billed = 0, paid = 0;
-      for (final d in docs.where((d) => d.type == EntryType.purchase)) {
+      for (final d in docs.reversed.where(
+        (d) => d.type == EntryType.purchase,
+      )) {
         grams += d.value('grams');
         billed += d.purchaseBill;
         paid += d.value('amount');
@@ -657,7 +663,7 @@ Report buildReport(
     case 'Office expenses':
       columns = ['Date', 'Reference', 'Description', 'From account', 'Amount'];
       var spent = 0;
-      for (final d in docs.where(
+      for (final d in docs.reversed.where(
         (d) => d.type == EntryType.expense && d.data['category'] == 'Office',
       )) {
         spent += d.total;
@@ -739,9 +745,17 @@ Report buildReport(
       // after this range, so read the allocations from everything known.
       final known = app.book;
       var grams = 0, cost = 0, unvalued = 0;
-      for (final a in known.allocations.where(
-        (a) => docs.any((d) => d.id == a.sale),
-      )) {
+      // Newest sale first; a sale's own rows keep their order.
+      final position = {for (final (i, d) in docs.indexed) d.id: i};
+      final newest =
+          [
+            for (final a in known.allocations)
+              if (position.containsKey(a.sale)) a,
+          ].indexed.toList()..sort((x, y) {
+            final c = position[y.$2.sale]!.compareTo(position[x.$2.sale]!);
+            return c != 0 ? c : x.$1.compareTo(y.$1);
+          });
+      for (final (_, a) in newest) {
         grams += a.grams;
         cost += a.cost;
         add([
@@ -753,9 +767,12 @@ Report buildReport(
           Cell.amount(a.cost),
         ]);
       }
-      for (final e in known.uncostedSales.entries.where(
-        (e) => docs.any((d) => d.id == e.key),
-      )) {
+      final waiting =
+          known.uncostedSales.entries
+              .where((e) => position.containsKey(e.key))
+              .toList()
+            ..sort((x, y) => position[y.key]!.compareTo(position[x.key]!));
+      for (final e in waiting) {
         unvalued += e.value;
         add([
           Document(app.record(e.key)!).reference,
@@ -774,41 +791,102 @@ Report buildReport(
       heading.add('${t('Cost')}: ${rs(cost)}');
     case 'Profit report':
       columns = ['Description', 'Amount'];
-      final ids = docs.map((d) => d.id).toSet();
-      // These entries' own postings, as known now: a sale entered before its
-      // purchase gets its cost when the stock arrives, possibly after this
-      // range, and that cost belongs to the sale's day.
-      final known = app.book;
-      int sum(String prefix) => known.postings
-          .where(
-            (p) => ids.contains(p.document) && p.account.startsWith(prefix),
-          )
-          .fold(0, (v, p) => v + p.debit);
-      final cylinderSales = -sum('revenue:gas'),
-          bulkSales = -sum('revenue:bulk'),
-          sales = cylinderSales + bulkSales,
-          cogs = sum('cogs'),
-          expense = sum('expense:');
-      add([t('Cylinder billing'), Cell.amount(cylinderSales)]);
-      add([t('Extra-KG billing'), Cell.amount(bulkSales)]);
-      add([t('Cost of gas sold'), Cell.amount(cogs)]);
-      add([t('Gross profit'), Cell.amount(sales - cogs)]);
-      add([t('Operating expenses'), Cell.amount(expense)]);
-      add([t('Net profit'), Cell.amount(sales - cogs - expense)]);
-      if (known.profitIncomplete) {
+      // The entries of the range as everything known gives them (a sale
+      // entered before its purchase gets its cost from it, possibly after
+      // this range), with hospitality, kharcha and the user's prices for gas
+      // without a cost: the same figures as "How profit is calculated".
+      final p = app.profit(from, to);
+      final settings = app.profitSettings;
+      String price(GasPrice? g, int grams) => g == null
+          ? '${kg(grams)} KG: ${t('purchase price not entered')}'
+          : '${kg(grams)} KG × Rs. ${money(g.rate)} ${t(switch (g.unit) {
+              1000 => 'per KG',
+              1000000 => 'per tonne',
+              _ => 'per 11.8 KG',
+            })}';
+      final rates = p.hospitalityRates.toList()..sort();
+      final totals = <int>{};
+      add([t('Cylinder billing'), Cell.amount(p.cylinderSales)]);
+      add([t('Extra-KG billing'), Cell.amount(p.bulkSales)]);
+      add([t('Cost of gas sold'), Cell.amount(p.cost)]);
+      if (p.waitingGrams != 0) {
+        add([
+          '${t('Negative stock (gas sold before its purchase)')} — '
+              '${price(settings.waiting, p.waitingGrams)}',
+          settings.waiting == null ? '—' : Cell.amount(p.waitingCost),
+        ]);
+      }
+      if (p.noCostGrams != 0) {
+        add([
+          '${t('Stock entered without cost')} — '
+              '${price(settings.noCost, p.noCostGrams)}',
+          settings.noCost == null ? '—' : Cell.amount(p.noCostCost),
+        ]);
+      }
+      totals.add(rows.length);
+      add([t('Gross profit'), Cell.amount(p.gross)]);
+      add([
+        rates.isEmpty
+            ? t('Hospitality')
+            : '${t('Hospitality')} — ${kg(p.soldGrams ~/ 1000)} ${t('ton')} × '
+                  '${rates.map((r) => 'Rs. ${money(r)}').join(' / ')} '
+                  '${t('per ton')}',
+        Cell.amount(p.hospitality),
+      ]);
+      add([t('Office kharcha'), Cell.amount(p.office)]);
+      for (final MapEntry(key: category, value: amount) in p.expenses.entries) {
+        if (amount == 0) continue;
+        add([
+          t(switch (category) {
+            'General' => 'Cash kharcha',
+            'Write-off' => 'Less / discount',
+            'Stock loss' => 'Gas stock loss',
+            _ => category,
+          }),
+          Cell.amount(amount),
+        ]);
+      }
+      totals.add(rows.length);
+      add([t('Net profit'), Cell.amount(p.net)]);
+      if (p.unpricedGrams > 0) {
         notes.add(
-          t('Uncosted stock and historical summaries make profit incomplete.'),
+          t('Profit is incomplete: {kg} KG have no purchase price.')
+              .replaceAll('{kg}', kg(p.unpricedGrams)),
         );
       }
+      if (p.estimated != 0) {
+        notes.add(
+          t(
+            'Gas without a purchase price is counted at your price until its purchase is entered. The khata does not change.',
+          ),
+        );
+      }
+      if (p.sharedGrams != 0) {
+        notes.add(
+          t(
+            'Purchase shares ({kg} KG) are at cost: not in sales, cost or hospitality.',
+          ).replaceAll('{kg}', kg(p.sharedGrams)),
+        );
+      }
+      if (p.historical) {
+        notes.add(t('Historical summaries make profit provisional.'));
+      }
       figures.addAll([
-        SheetFigure(t('Cylinder billing'), rs(cylinderSales)),
-        SheetFigure(t('Extra-KG billing'), rs(bulkSales)),
-        SheetFigure(t('Cost of gas sold'), rs(cogs)),
-        SheetFigure(t('Gross profit'), rs(sales - cogs)),
-        SheetFigure(t('Operating expenses'), rs(expense)),
-        SheetFigure(t('Net profit'), rs(sales - cogs - expense)),
+        SheetFigure(t('Sales'), rs(p.sales), [
+          '${t('Cylinder billing')} ${money(p.cylinderSales)}',
+          '${t('Extra-KG billing')} ${money(p.bulkSales)}',
+        ]),
+        SheetFigure(t('Cost of gas sold'), rs(p.cost + p.estimated), [
+          if (p.estimated != 0) '${t('your price')} ${money(p.estimated)}',
+        ]),
+        SheetFigure(t('Gross profit'), rs(p.gross)),
+        SheetFigure(t('Hospitality'), rs(p.hospitality)),
+        SheetFigure(t('Kharcha'), rs(p.office + p.otherExpenses), [
+          '${t('Office kharcha')} ${money(p.office)}',
+        ]),
+        SheetFigure(t('Net profit'), rs(p.net)),
       ]);
-      heading.add('${t('Net profit')}: ${rs(sales - cogs - expense)}');
+      heading.add('${t('Net profit')}: ${rs(p.net)}');
       tables = [
         reportTable(
           t,
@@ -816,7 +894,7 @@ Report buildReport(
           columns: translated(columns),
           rows: rows,
           // Gross profit and Net profit.
-          boldRows: {3, 5},
+          boldRows: totals,
           numbered: false,
         ),
       ];
@@ -886,6 +964,18 @@ Report buildReport(
         if (!inRange(date)) continue;
         add([date, c.id, '${c.action} · ${c.status}', c.reason]);
       }
+      // Newest first (the server's and this device's times differ in form,
+      // so compare them as instants).
+      DateTime at(List<Cell> r) =>
+          DateTime.tryParse(r[0].text) ?? DateTime.utc(0);
+      final ordered = rows.indexed.toList()
+        ..sort((x, y) {
+          final c = at(y.$2).compareTo(at(x.$2));
+          return c != 0 ? c : y.$1.compareTo(x.$1);
+        });
+      rows
+        ..clear()
+        ..addAll([for (final (_, r) in ordered) r]);
     case 'Daily roznamcha':
       // Printed like the original page: the day's overview (the page's
       // opening strip and summary cards), A (Aamad), B (Kharcha), Safi Baqaya.
@@ -917,7 +1007,8 @@ Report buildReport(
             d.type == EntryType.purchase || d.type == EntryType.stockAdjustment,
       );
       String gas(int g) => g < 0 ? '${t('Udhar')} ${kg(-g)}' : kg(g);
-      for (var i = 0; i < days.length; i++) {
+      // Newest day first; each day's own entries keep the page's order.
+      for (var i = days.length - 1; i >= 0; i--) {
         final day = days[i];
         final date = day.date;
         void overview(String label, List<String> details, [Cell? amount]) =>
@@ -1195,7 +1286,7 @@ Report buildReport(
             ]
           : days;
       roznamchaSheets = (compact) => [
-        for (final day in printDays)
+        for (final day in printDays.reversed)
           rozSheet(
             app,
             day,

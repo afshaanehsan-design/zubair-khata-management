@@ -1,6 +1,7 @@
 import '../../core/controller.dart';
 import '../../core/l10n.dart';
 import '../../core/models.dart';
+import '../ledger/profit.dart';
 import '../ledger/roznamcha.dart';
 import 'report_sheet.dart';
 import 'reports.dart';
@@ -239,14 +240,33 @@ Report _dailyReport(
         'Cylinder billing',
         'Extra-KG billing',
         'Cost of gas sold',
+        'Gas at your price',
         'Gross profit',
-        'Operating expenses',
+        'Hospitality',
+        'Office kharcha',
+        'Other kharcha',
         'Net profit',
       ];
       additive.addAll({for (var i = 1; i < columns.length; i++) i: 100});
+      // Each day as "How profit is calculated" gives it; the detailed
+      // report's range is the sum of these days.
+      final byDay = profitByDay(app.book, app.profitSettings, from, to);
       for (final date in days) {
-        final day = buildReport(app, kind, date, date, urdu: detailed.urdu);
-        add(date, [for (final row in day.rows) row[1]]);
+        final p = byDay[date] ?? Profit();
+        add(date, [
+          for (final amount in [
+            p.cylinderSales,
+            p.bulkSales,
+            p.cost,
+            p.estimated,
+            p.gross,
+            p.hospitality,
+            p.office,
+            p.otherExpenses,
+            p.net,
+          ])
+            Cell.amount(amount),
+        ]);
       }
     case 'FIFO allocations':
       columns = ['Date', 'Weight (KG)', 'Cost', 'Unvalued quantity'];

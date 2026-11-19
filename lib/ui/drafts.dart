@@ -150,11 +150,21 @@ DraftFacts draftFacts(AppController app, EntryDraft d, Words t) {
 }
 
 /// The Drafts tab of the New entry section: every saved draft, newest first,
-/// with Open and Delete.
+/// with Open and Delete. The draft open for editing ([openId]) shows its
+/// [editor] (its fields with Cancel, Draft and Add) in its own row, so it is
+/// finished without leaving the list. Meanwhile no other draft opens.
 class DraftList extends StatelessWidget {
   final AppController app;
   final ValueChanged<EntryDraft> onOpen;
-  const DraftList({required this.app, required this.onOpen, super.key});
+  final String? openId;
+  final Widget Function(EntryDraft draft)? editor;
+  const DraftList({
+    required this.app,
+    required this.onOpen,
+    this.openId,
+    this.editor,
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -193,8 +203,16 @@ class DraftList extends StatelessWidget {
       children: [
         for (final d in drafts)
           Padding(
+            // Keyed, so the open row keeps its editor when a row above it
+            // goes or a saved draft moves to the top.
+            key: ValueKey('draft-row-${d.id}'),
             padding: const EdgeInsets.only(bottom: 8),
-            child: _DraftRow(app: app, draft: d, onOpen: onOpen),
+            child: _DraftRow(
+              app: app,
+              draft: d,
+              onOpen: openId == null ? onOpen : null,
+              editor: d.id == openId ? editor?.call(d) : null,
+            ),
           ),
       ],
     );
@@ -204,24 +222,33 @@ class DraftList extends StatelessWidget {
 class _DraftRow extends StatelessWidget {
   final AppController app;
   final EntryDraft draft;
-  final ValueChanged<EntryDraft> onOpen;
+
+  /// Null while another draft is open.
+  final ValueChanged<EntryDraft>? onOpen;
+
+  /// The fields of this draft while it is open, in place of its buttons.
+  final Widget? editor;
   const _DraftRow({
     required this.app,
     required this.draft,
     required this.onOpen,
+    this.editor,
   });
 
   @override
   Widget build(BuildContext context) {
     final f = draftFacts(app, draft, context.words);
     final missing = draft.missing.trim();
+    final open = editor != null;
     return Container(
       key: ValueKey('draft-${draft.id}'),
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      padding: open
+          ? const EdgeInsets.fromLTRB(10, 10, 10, 12)
+          : const EdgeInsets.fromLTRB(12, 10, 12, 6),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: rozBorder),
+        border: Border.all(color: open ? amber : rozBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -304,35 +331,45 @@ class _DraftRow extends StatelessWidget {
                 ],
               ),
             ),
-          Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 4,
-            children: [
-              TextButton.icon(
-                key: ValueKey('draft-delete-${draft.id}'),
-                style: TextButton.styleFrom(
-                  foregroundColor: rozRed,
-                  visualDensity: VisualDensity.compact,
+          if (open) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Divider(height: 1, color: rozBorder),
+            ),
+            editor!,
+          ] else
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 4,
+              children: [
+                TextButton.icon(
+                  key: ValueKey('draft-delete-${draft.id}'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: rozRed,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: () async {
+                    if (await confirmPlain(
+                      context,
+                      'Yeh draft delete karein?',
+                    )) {
+                      await app.deleteEntryDraft(draft.id);
+                    }
+                  },
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: Text(context.t('Delete')),
                 ),
-                onPressed: () async {
-                  if (await confirmPlain(context, 'Yeh draft delete karein?')) {
-                    await app.deleteEntryDraft(draft.id);
-                  }
-                },
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: Text(context.t('Delete')),
-              ),
-              TextButton.icon(
-                key: ValueKey('draft-open-${draft.id}'),
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
+                TextButton.icon(
+                  key: ValueKey('draft-open-${draft.id}'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: onOpen == null ? null : () => onOpen!(draft),
+                  icon: const Icon(Icons.edit_note_rounded, size: 18),
+                  label: Text(context.t('Kholein')),
                 ),
-                onPressed: () => onOpen(draft),
-                icon: const Icon(Icons.edit_note_rounded, size: 18),
-                label: Text(context.t('Kholein')),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
     );

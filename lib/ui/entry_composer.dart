@@ -104,6 +104,12 @@ class EntryComposer extends StatefulWidget {
   /// A saved draft ([AppController.entryDrafts]) being finished: Save turns
   /// it into an entry and deletes it, Draft updates it.
   final EntryDraft? draft;
+
+  /// Set when the composer is drawn in the row of a [draft] open in the
+  /// Drafts tab instead of in a dialog: it has no title bar or scrolling of
+  /// its own, its Save is called Add, and Add, Draft and Cancel end with
+  /// this (what to say, null after Cancel) instead of closing a dialog.
+  final ValueChanged<String?>? onClosed;
   const EntryComposer({
     required this.app,
     this.initial,
@@ -112,6 +118,7 @@ class EntryComposer extends StatefulWidget {
     this.prefill,
     this.onSaved,
     this.draft,
+    this.onClosed,
     super.key,
   });
   @override
@@ -161,6 +168,9 @@ class _EntryComposerState extends State<EntryComposer> {
   /// correction or a reviewed change always starts from its own data. A
   /// saved draft being finished keeps its unsaved values under its own id.
   bool get keepsDraft => widget.replace == null && widget.prefill == null;
+
+  /// In the row of a draft open in the Drafts tab ([EntryComposer.onClosed]).
+  bool get inList => widget.onClosed != null;
   String get draftKey => widget.draft != null
       ? 'saved:${widget.draft!.id}'
       : widget.initial != null &&
@@ -777,10 +787,14 @@ class _EntryComposerState extends State<EntryComposer> {
       posted = true;
       await widget.onSaved?.call();
       if (keepsDraft) widget.app.composerDrafts.remove(draftKey);
-    }, success: 'Saved locally');
+    }, success: inList ? null : 'Saved locally');
     if (!mounted) return;
     if (posted && !next) {
-      Navigator.pop(context);
+      if (inList) {
+        widget.onClosed!(context.t('Saved locally'));
+      } else {
+        Navigator.pop(context);
+      }
       return;
     }
     if (posted) {
@@ -862,14 +876,33 @@ class _EntryComposerState extends State<EntryComposer> {
         missing: missing,
       );
       widget.app.composerDrafts.remove(draftKey);
-    }, success: 'Saved to drafts');
+    }, success: inList ? null : 'Saved to drafts');
     if (!mounted) return;
     if (done) {
-      Navigator.pop(context);
+      if (inList) {
+        widget.onClosed!(context.t('Saved to drafts'));
+      } else {
+        Navigator.pop(context);
+      }
       return;
     }
     setState(() => saving = false);
   }
+
+  /// Cancel: closes the composer. In the Drafts tab the draft's unsaved
+  /// changes go too, so it opens again as it was saved.
+  void cancel() {
+    if (!inList) {
+      Navigator.pop(context);
+      return;
+    }
+    widget.app.composerDrafts.remove(draftKey);
+    widget.onClosed!(null);
+  }
+
+  /// The fields' area: the composer's own scrolling part of its dialog, or
+  /// as tall as the fields in the Drafts tab, where the page scrolls.
+  Widget _fieldsArea(Widget child) => inList ? child : Expanded(child: child);
 
   @override
   Widget build(BuildContext context) {
@@ -887,42 +920,51 @@ class _EntryComposerState extends State<EntryComposer> {
       EntryType.cylinder,
     ].contains(type);
     return Column(
+      mainAxisSize: inList ? MainAxisSize.min : MainAxisSize.max,
+      crossAxisAlignment: inList
+          ? CrossAxisAlignment.stretch
+          : CrossAxisAlignment.center,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 16, 16, 8),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: teal.withValues(alpha: .1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(entryIcon(type), color: teal),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Text(
-                  context.t(
-                    widget.replace == null ? 'New entry' : 'Correct entry',
+        if (!inList)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 16, 8),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: teal.withValues(alpha: .1),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: ink,
+                  child: Icon(entryIcon(type), color: teal),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    context.t(
+                      widget.replace == null ? 'New entry' : 'Correct entry',
+                    ),
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      color: ink,
+                    ),
                   ),
                 ),
-              ),
-              IconButton(
-                onPressed: saving ? null : () => Navigator.pop(context),
-                icon: const Icon(Icons.close),
-              ),
-            ],
+                IconButton(
+                  onPressed: saving ? null : () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
           ),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+        _fieldsArea(
+          SingleChildScrollView(
+            // In the Drafts tab it never scrolls (it is as tall as its
+            // fields) and leaves the page's scroll controller alone.
+            primary: inList ? false : null,
+            physics: inList ? const NeverScrollableScrollPhysics() : null,
+            padding: EdgeInsets.all(inList ? 0 : 24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1438,23 +1480,28 @@ class _EntryComposerState extends State<EntryComposer> {
           ),
         ),
         Container(
-          padding: EdgeInsets.fromLTRB(
-            24,
-            16,
-            24,
-            16 + MediaQuery.viewInsetsOf(context).bottom,
-          ),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Color(0xffe0e7dc))),
-          ),
+          padding: inList
+              ? const EdgeInsets.only(top: 16)
+              : EdgeInsets.fromLTRB(
+                  24,
+                  16,
+                  24,
+                  16 + MediaQuery.viewInsetsOf(context).bottom,
+                ),
+          decoration: inList
+              ? null
+              : const BoxDecoration(
+                  color: Colors.white,
+                  border: Border(top: BorderSide(color: Color(0xffe0e7dc))),
+                ),
           child: Wrap(
             alignment: WrapAlignment.end,
             spacing: 12,
             runSpacing: 10,
             children: [
               TextButton(
-                onPressed: saving ? null : () => Navigator.pop(context),
+                key: const ValueKey('composer-cancel'),
+                onPressed: saving ? null : cancel,
                 child: Text(context.t('Cancel')),
               ),
               if (keepsDraft)
@@ -1478,8 +1525,11 @@ class _EntryComposerState extends State<EntryComposer> {
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.check_rounded, size: 18),
-                label: Text(context.t('Save')),
+                    : Icon(
+                        inList ? Icons.add_rounded : Icons.check_rounded,
+                        size: 18,
+                      ),
+                label: Text(context.t(inList ? 'Add' : 'Save')),
               ),
             ],
           ),

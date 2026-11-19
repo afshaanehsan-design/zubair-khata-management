@@ -401,17 +401,15 @@ class Tag extends StatelessWidget {
 class Notice extends StatelessWidget {
   final String text;
   final Widget? action;
-  const Notice(this.text, {this.action, super.key});
+
+  /// Several buttons: beside the text on a wide screen, under it on a narrow
+  /// one (the stock warnings' Purchase price and Stock).
+  final List<Widget> actions;
+  const Notice(this.text, {this.action, this.actions = const [], super.key});
   @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: const Color(0xfffff6e7),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: const Color(0xffeedfbd)),
-    ),
-    child: Row(
+  Widget build(BuildContext context) {
+    final buttons = [?action, ...actions];
+    Widget line(bool withButtons) => Row(
       children: [
         const Icon(Icons.info_outline_rounded, color: amber, size: 20),
         const SizedBox(width: 12),
@@ -421,10 +419,35 @@ class Notice extends StatelessWidget {
             style: const TextStyle(color: Color(0xff855b20), fontSize: 13),
           ),
         ),
-        ?action,
+        if (withButtons) ...buttons,
       ],
-    ),
-  );
+    );
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xfffff6e7),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xffeedfbd)),
+      ),
+      child: buttons.length < 2
+          ? line(true)
+          : LayoutBuilder(
+              builder: (context, box) => box.maxWidth >= 560
+                  ? line(true)
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        line(false),
+                        Align(
+                          alignment: AlignmentDirectional.centerEnd,
+                          child: Wrap(spacing: 4, children: buttons),
+                        ),
+                      ],
+                    ),
+            ),
+    );
+  }
 }
 
 class SectionHeader extends StatelessWidget {

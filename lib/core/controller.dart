@@ -11,10 +11,30 @@ import '../data/sync.dart';
 import '../data/secure_auth.dart';
 import '../features/ledger/book.dart';
 import '../features/ledger/draft_projection.dart';
+import '../features/ledger/profit.dart';
 import 'models.dart';
 import 'organizations.dart';
 
 const uuid = Uuid();
+
+/// Which entries the Stock page's profit adds up: the top bar's day, its
+/// month up to that day, or every entry up to that day.
+enum ProfitPeriod {
+  day('Day'),
+  month('This month'),
+  all('All');
+
+  /// The English label, also the translation key.
+  final String label;
+  const ProfitPeriod(this.label);
+
+  /// The first and last business date of this period, ending on [date].
+  (String, String) range(String date) => switch (this) {
+    ProfitPeriod.day => (date, date),
+    ProfitPeriod.month => ('${date.substring(0, 7)}-01', date),
+    ProfitPeriod.all => ('2000-01-01', date),
+  };
+}
 
 /// How Pending balances arranges its parties: by name A to Z, the biggest
 /// balance first, or newest first like the Parties page's list.
@@ -73,6 +93,10 @@ class AppController extends ChangeNotifier {
   /// page's Pending balances menu). A view setting like [page], not business
   /// data, so a reset leaves it alone.
   PendingOrder pendingOrder = PendingOrder.name;
+
+  /// The period of the Stock page's profit. A view setting like [page], so a
+  /// reset leaves it alone.
+  ProfitPeriod profitPeriod = ProfitPeriod.month;
 
   /// The PDF preview's size slider, in percent, by [Report.kind]. Saved in
   /// this organization's metadata (`pdf_sizes`), so it is remembered on this
@@ -185,6 +209,43 @@ class AppController extends ChangeNotifier {
 
   Json get settings => record('business')?.data ?? {};
   String get businessName => '${settings['name'] ?? defaultBusinessName}';
+
+  /// Hospitality and the user's prices for gas without a cost, kept on the
+  /// business profile (see `profit.dart`).
+  ProfitSettings get profitSettings => ProfitSettings.of(settings);
+  final _profits = <String, Profit>{};
+
+  /// The profit of the entries dated [from] to [to], as everything known now
+  /// gives it ([book], saved drafts included): a sale entered before its
+  /// purchase is costed by that purchase. Kept until the next [reload].
+  Profit profit(String from, String to) {
+    if (_profits.length > 40) _profits.clear();
+    return _profits.putIfAbsent(
+      '$from|$to',
+      () => profitOf(book, profitSettings, from, to),
+    );
+  }
+
+  /// Saves hospitality and the prices of gas without a cost on the business
+  /// profile, as an ordinary change of that record (it syncs; no entry or
+  /// balance changes).
+  Future<void> saveProfitSettings(ProfitSettings next) async {
+    final current = records.where((r) => r.id == 'business').firstOrNull;
+    if (current == null) throw StateError('Business profile is missing');
+    await commit([
+      Change('business', 'settings', {
+        ...current.data,
+        'profit': next.toJson(),
+      }, current.version),
+    ]);
+  }
+
+  void setProfitPeriod(ProfitPeriod period) {
+    if (period == profitPeriod) return;
+    profitPeriod = period;
+    notifyListeners();
+  }
+
   int get pendingCount => commands
       .where((c) => ['queued', 'sending', 'accepted'].contains(c.status))
       .length;
@@ -318,6 +379,7 @@ class AppController extends ChangeNotifier {
     _draftProjection = null;
     _book = null;
     _datedBooks.clear();
+    _profits.clear();
     _quoteKey = null;
   }
 

@@ -3,6 +3,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../core/controller.dart';
 import '../core/models.dart';
+import '../features/ledger/book.dart' show Book;
 import '../features/ledger/roznamcha.dart';
 import '../features/reports/reports.dart';
 import 'components.dart';
@@ -12,6 +13,7 @@ import 'export_ui.dart';
 import 'masters.dart';
 import 'opening_balance.dart';
 import 'pages.dart';
+import 'profit_ui.dart';
 import 'roznamcha_form.dart';
 import 'roznamcha_widgets.dart';
 
@@ -83,7 +85,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
   final formKey = GlobalKey<RoznamchaFormState>();
   final entryKey = GlobalKey();
   final rateField = TextEditingController();
-  bool showAll = false, hisabOpen = true;
+  bool showAll = false, hisabOpen = true, profitOpen = true;
 
   AppController get app => widget.app;
 
@@ -125,7 +127,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _heading(day, dayDocs),
-        ..._notices(book.warnings, batch, batched, day, closing),
+        ..._notices(book, batch, batched, day, closing),
         if (book.documents.any((d) => d.isDraft))
           const Notice(
             'Totals include saved drafts. Missing values are not counted.',
@@ -161,6 +163,8 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         ),
         const SizedBox(height: 16),
         _hisabMel(day),
+        const SizedBox(height: 16),
+        _profit(),
         if (full.other.isNotEmpty) ...[
           const SizedBox(height: 16),
           RozPanel(
@@ -264,45 +268,58 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
   }
 
   List<Widget> _notices(
-    List<String> warnings,
+    Book book,
     int? batch,
     bool batched,
     RoznamchaDay day,
     int closing,
-  ) => [
-    if (app.isClosed(app.selectedDate)) const Notice('Day is closed'),
-    if (app.conflictCount > 0)
-      Notice(
-        '${context.t('Review changes')}: ${app.conflictCount}',
-        action: TextButton(
-          onPressed: () => app.go('settings'),
-          child: Text(context.t('View all')),
-        ),
-      ),
-    // Stock warnings in one short line, so the day's entries stay on top.
-    if (warnings.isNotEmpty)
-      Notice(
-        warnings.map(context.t).join(' · '),
-        action: TextButton(
-          onPressed: () => app.go('stock'),
-          child: Text(context.t('Stock')),
-        ),
-      ),
-    if (batch != null)
-      Notice(
-        batched
-            ? '${context.t('Khata saaf kiya gaya, naya batch')} ${DateFormat.Hm().format(DateTime.fromMillisecondsSinceEpoch(batch))}. ${context.t('Pehle ki entries Opening mein shamil hain.')}'
-            : context.t('Poora din dikh raha hai.'),
-        action: TextButton(
-          onPressed: () => setState(() => showAll = !showAll),
-          child: Text(
-            context.t(batched ? 'Poora din dikhao' : 'Sirf naya batch'),
+  ) {
+    final warnings = stockWarnings(app, book);
+    return [
+      if (app.isClosed(app.selectedDate)) const Notice('Day is closed'),
+      if (app.conflictCount > 0)
+        Notice(
+          '${context.t('Review changes')}: ${app.conflictCount}',
+          action: TextButton(
+            onPressed: () => app.go('settings'),
+            child: Text(context.t('View all')),
           ),
         ),
-      ),
-    if (day.safi != closing)
-      Notice('${context.t('Hisab farq')}: ${rs(day.safi)} ≠ ${rs(closing)}'),
-  ];
+      // Stock warnings in one short line, so the day's entries stay on top.
+      // The purchase price of gas sold before its purchase can be entered
+      // right there, for profit.
+      if (warnings.isNotEmpty)
+        Notice(
+          warnings.map(context.t).join(' · '),
+          actions: [
+            if (needsGasPrice(app))
+              TextButton(
+                key: const ValueKey('notice-purchase-price'),
+                onPressed: () => editGasPrices(context, app),
+                child: Text(context.t('Purchase price')),
+              ),
+            TextButton(
+              onPressed: () => app.go('stock'),
+              child: Text(context.t('Stock')),
+            ),
+          ],
+        ),
+      if (batch != null)
+        Notice(
+          batched
+              ? '${context.t('Khata saaf kiya gaya, naya batch')} ${DateFormat.Hm().format(DateTime.fromMillisecondsSinceEpoch(batch))}. ${context.t('Pehle ki entries Opening mein shamil hain.')}'
+              : context.t('Poora din dikh raha hai.'),
+          action: TextButton(
+            onPressed: () => setState(() => showAll = !showAll),
+            child: Text(
+              context.t(batched ? 'Poora din dikhao' : 'Sirf naya batch'),
+            ),
+          ),
+        ),
+      if (day.safi != closing)
+        Notice('${context.t('Hisab farq')}: ${rs(day.safi)} ≠ ${rs(closing)}'),
+    ];
+  }
 
   Widget _onboarding() => Padding(
     padding: const EdgeInsets.only(bottom: 14),
@@ -1717,6 +1734,14 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
       title: 'Hisab Mel (Safi Baqaya kaise bana)',
       subtitle: 'Har line ek raqam. Band / khol sakte ho.',
       actions: [
+        // The day's Cash book: every cash movement, closing at Safi Baqaya.
+        ReportButton(
+          app,
+          'Cash book',
+          app.selectedDate,
+          app.selectedDate,
+          key: const ValueKey('roz-safi-report'),
+        ),
         Text(
           rs(day.safi),
           textDirection: TextDirection.ltr,
@@ -1760,6 +1785,45 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
               ],
             )
           : const SizedBox.shrink(),
+    );
+  }
+
+  // ---------- profit ----------
+
+  /// "How profit is calculated" for the day, after Hisab Mel: the day's
+  /// sales, the purchase cost of their gas (a later purchase included),
+  /// hospitality and kharcha (asked for by the user on 19 November 2026).
+  Widget _profit() {
+    final profit = app.profit(app.selectedDate, app.selectedDate);
+    return RozPanel(
+      key: const ValueKey('roz-profit'),
+      title: 'How profit is calculated',
+      subtitle: 'Sale − gas ki khareed − hospitality − kharcha = munafa.',
+      actions: [
+        ReportButton(
+          app,
+          'Profit report',
+          app.selectedDate,
+          app.selectedDate,
+          key: const ValueKey('roz-profit-report'),
+        ),
+        Text(
+          rs(profit.net),
+          key: const ValueKey('roz-profit-net'),
+          textDirection: TextDirection.ltr,
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            color: profit.net < 0 ? rozRed : teal,
+            fontSize: 15,
+          ),
+        ),
+        IconButton(
+          tooltip: context.t(profitOpen ? 'Band karo' : 'Kholo'),
+          onPressed: () => setState(() => profitOpen = !profitOpen),
+          icon: Icon(profitOpen ? Icons.expand_less : Icons.expand_more),
+        ),
+      ],
+      child: profitOpen ? ProfitLines(app, profit) : const SizedBox.shrink(),
     );
   }
 

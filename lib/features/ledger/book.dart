@@ -93,6 +93,13 @@ class Book {
   /// The shared (at-cost) part of [uncostedSales], per purchase share.
   final Map<String, int> uncostedShares = {};
 
+  /// The rest of [uncostedSales] (gas that is not a purchase share's) by
+  /// where it stands: '' while it waits for stock (sold before its purchase
+  /// was entered: negative stock), or the id of the lot of unknown cost it
+  /// came from. Document id → source → grams. Profit counts these at the
+  /// user's prices (`profit.dart`); nothing is posted for them.
+  final Map<String, Map<String, int>> uncostedSources = {};
+
   /// FIFO cost of each purchase share's shared gas (negative on a credit
   /// note that returned it).
   final Map<String, int> shareCosts = {};
@@ -420,13 +427,30 @@ class Book {
     return total;
   }
 
-  void _uncosted(Document d, String account, int grams) {
+  /// [grams] of [d]'s gas have no known cost: they wait for stock, or came
+  /// from the lot [source] of unknown cost.
+  void _uncosted(Document d, String account, int grams, {String source = ''}) {
     uncostedSales.update(d.id, (v) => v + grams, ifAbsent: () => grams);
     if (account == shareCostAccount) {
       uncostedShares.update(d.id, (v) => v + grams, ifAbsent: () => grams);
+    } else {
+      _source(d.id, source, grams);
     }
   }
 
+  void _source(String id, String source, int grams) {
+    final sources = uncostedSources.putIfAbsent(id, () => {});
+    final left = (sources[source] ?? 0) + grams;
+    if (left == 0) {
+      sources.remove(source);
+    } else {
+      sources[source] = left;
+    }
+    if (sources.isEmpty) uncostedSources.remove(id);
+  }
+
+  /// [grams] of [d]'s gas that waited for stock got their cost, or stopped
+  /// waiting because a credit note returned them.
   void _costed(Document d, String account, int grams) {
     for (final map in [
       uncostedSales,
@@ -439,6 +463,7 @@ class Book {
         map[d.id] = left;
       }
     }
+    if (account != shareCostAccount) _source(d.id, '', -grams);
   }
 
   void _stockOut(Document d, int grams, {String account = 'cogs'}) {
@@ -452,7 +477,7 @@ class Book {
       if (lot.grams <= 0) continue;
       final used = remaining < lot.grams ? remaining : lot.grams;
       if (lot.cost == null) {
-        _uncosted(d, account, used);
+        _uncosted(d, account, used, source: lot.id);
       } else {
         final cost = multiplyDivide(lot.cost!, used, lot.grams);
         lot.cost = lot.cost! - cost;
@@ -483,6 +508,10 @@ class Book {
         lot.cost = lot.cost! - part;
         _allocate(demand.document, d.date, demand.account, lot, used, part);
         _costed(demand.document, demand.account, used);
+      } else if (demand.account != shareCostAccount) {
+        // Still without a cost, but now from this lot instead of waiting.
+        _source(demand.document.id, '', -used);
+        _source(demand.document.id, lot.id, used);
       }
       lot.grams -= used;
       demand.grams -= used;
@@ -857,6 +886,20 @@ class Book {
 
   List<Posting> ledger(String account) =>
       postings.where((p) => p.account == account).toList();
+
+  /// The documents this book replayed, by id (built when first asked).
+  late final Map<String, Document> byId = {for (final d in documents) d.id: d};
+
+  /// Each document's postings, in order (built when first asked): what it
+  /// posted itself and, for gas that waited, the cost the stock gave it.
+  late final Map<String, List<Posting>> postingsOf = () {
+    final map = <String, List<Posting>>{};
+    for (final p in postings) {
+      map.putIfAbsent(p.document, () => []).add(p);
+    }
+    return map;
+  }();
+
   int dayMovement(String date, String account) =>
       ledger(account)
           .where((p) => p.date == date)

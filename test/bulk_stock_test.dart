@@ -239,14 +239,16 @@ void main() {
       final stockReport = buildReport(app, 'Gas stock', first, second);
       expect(stockReport.rows.first.last.numeric, 25);
       final sales = buildReport(app, 'Sales register', first, second);
-      expect(sales.rows.take(2).map((r) => r[3].numeric), [20, 5]);
+      // Newest first.
+      expect(sales.rows.take(2).map((r) => r[3].numeric), [5, 20]);
       expect(sales.rows.last[3].numeric, 25);
       final profit = buildReport(app, 'Profit report', first, second);
       num? amount(String label) =>
           profit.rows.firstWhere((r) => r[0].text == label)[1].numeric;
       expect(amount('Cost of gas sold'), 7500);
       expect(amount('Gross profit'), app.book.grossProfit / 100);
-      expect(amount('Net profit'), app.book.grossProfit / 100);
+      // Hospitality: 25 kg sold at Rs 1,200 per ton is Rs 30.
+      expect(amount('Net profit'), (app.book.grossProfit - 3000) / 100);
       expect(profit.notes, isEmpty);
       final daily = buildReport(app, 'Daily roznamcha', second, second);
       expect(daily.rows.any((r) => r[2].text.contains('Bulk 5 kg')), isTrue);

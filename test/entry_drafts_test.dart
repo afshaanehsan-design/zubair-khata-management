@@ -1,6 +1,7 @@
 // Saved drafts: the Draft button beside Add / Save keeps an entry, complete
 // or not, on this device; the Drafts tab of the New entry section lists them
-// to open, finish and add, or delete. A finished draft keeps its own day.
+// to open (in their own row of the list), finish and add, or delete. A
+// finished draft keeps its own day.
 import 'dart:async';
 import 'dart:convert';
 
@@ -10,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zubair_khata_management/core/controller.dart';
 import 'package:zubair_khata_management/core/models.dart';
 import 'package:zubair_khata_management/data/database.dart';
+import 'package:zubair_khata_management/ui/drafts.dart';
 import 'package:zubair_khata_management/ui/entry_composer.dart';
 import 'package:zubair_khata_management/ui/roznamcha_form.dart';
 
@@ -27,10 +29,20 @@ Finder openButton(EntryDraft d) => find.byKey(ValueKey('draft-open-${d.id}'));
 String text(WidgetTester tester, String key) =>
     tester.widget<TextField>(field(key)).controller!.text;
 
+/// [f] inside the list row of draft [d].
+Finder inRow(EntryDraft d, Finder f) =>
+    find.descendant(of: find.byKey(ValueKey('draft-${d.id}')), matching: f);
+
+/// Whether the Kholein button of draft [d] can be pressed.
+bool canOpen(WidgetTester tester, EntryDraft d) =>
+    tester.widget<TextButton>(openButton(d)).onPressed != null;
+
 Finder inComposer(Finder f) =>
     find.descendant(of: find.byType(EntryComposer), matching: f);
 Finder composerField(String key) =>
     inComposer(find.byKey(ValueKey('field-$key')));
+String composerText(WidgetTester tester, String key) =>
+    tester.widget<TextField>(composerField(key)).controller!.text;
 
 Future<(AppController, KhataDatabase)> start(WidgetTester tester) async {
   tester.view.physicalSize = const Size(1200, 1800);
@@ -161,8 +173,10 @@ void main() {
     await db.close();
   });
 
-  testWidgets('Roznamcha form: Draft, the Drafts tab, Open on its own day, '
-      'Cancel, Draft again and Add', (tester) async {
+  testWidgets('Roznamcha form: Draft, the Drafts tab, and a draft finished in '
+      'its own row of the list: Draft again, Cancel, its day, Add', (
+    tester,
+  ) async {
     final (app, db) = await start(tester);
     app.setDate('2026-11-15');
     await pumpPage(tester, app);
@@ -208,65 +222,108 @@ void main() {
     expect(find.textContaining('15-11-2026'), findsOneWidget);
     expect(addButton, findsNothing);
 
-    // Opened on another day: the top bar goes back to the draft's day.
+    // A second draft, to see that one opens at a time.
+    final other = await app.saveEntryDraft(
+      source: EntryDraft.roznamcha,
+      tab: 'kharcha',
+      date: '2026-11-16',
+      data: {'kind': 'cash', 'amount': '500'},
+      missing: 'Tafseel likhna zaroori hai',
+    );
+    await tester.pumpAndSettle();
+
+    // Opened on another day: its fields open in its own row of the list,
+    // on its own day. The top bar's day and the Drafts tab stay.
     app.setDate('2026-11-17');
     await tester.pumpAndSettle();
     await tap(tester, openButton(draft));
-    expect(app.selectedDate, '2026-11-15');
-    expect(openBanner, findsOneWidget);
+    expect(app.selectedDate, '2026-11-17');
+    expect(inRow(draft, field('party')), findsOneWidget);
     expect(text(tester, 'party'), 'Ali Traders');
     expect(text(tester, 'q11800'), '2');
-    // Only its own tab, like a correction.
+    expect(
+      inRow(draft, find.byKey(const ValueKey('roz-draft-date'))),
+      findsOneWidget,
+    );
+    expect(inRow(draft, find.text('15-11-2026')), findsOneWidget);
+    expect(inRow(draft, addButton), findsOneWidget);
+    expect(inRow(draft, draftButton), findsOneWidget);
+    expect(openBanner, findsNothing);
+    // Only the Drafts tab while it is open, and no other draft opens.
+    expect(tab('drafts'), findsOneWidget);
+    expect(tab('aamad'), findsNothing);
     expect(tab('kharcha'), findsNothing);
-    expect(tab('drafts'), findsNothing);
+    expect(openButton(draft), findsNothing);
+    expect(canOpen(tester, other), isFalse);
 
-    // Leaving the page and coming back keeps what was added to it.
+    // Leaving the page and coming back keeps it open with what was added.
     await tester.enterText(field('vehicle'), '92');
     await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox.shrink());
     await pumpPage(tester, app);
-    expect(openBanner, findsOneWidget);
+    expect(inRow(draft, field('vehicle')), findsOneWidget);
     expect(text(tester, 'vehicle'), '92');
     expect(text(tester, 'party'), 'Ali Traders');
 
-    // Draft again updates the same draft and returns to the tab's values.
+    // Draft again updates the same draft, which closes in the list.
     await tap(tester, draftButton);
-    expect(app.entryDrafts, hasLength(1));
-    expect(app.entryDrafts.single.id, draft.id);
-    expect(app.entryDrafts.single.data['vehicle'], '92');
-    expect(openBanner, findsNothing);
-    expect(text(tester, 'party'), 'Bilal');
+    expect(app.entryDrafts.map((d) => d.id), [draft.id, other.id]);
+    expect(app.entryDraft(draft.id)!.data['vehicle'], '92');
+    expect(app.entryDraft(draft.id)!.date, '2026-11-15');
+    expect(field('party'), findsNothing);
+    expect(canOpen(tester, draft), isTrue);
+    expect(canOpen(tester, other), isTrue);
+    expect(find.textContaining('Draft mein save ho gaya'), findsOneWidget);
     expect(app.rozDrafts['page:open'], isNull);
+    expect(app.selectedDate, '2026-11-17');
 
     // Cancel puts it back unchanged.
-    await tap(tester, tab('drafts'));
-    await tap(tester, openButton(app.entryDrafts.single));
+    await tap(tester, openButton(draft));
     await tester.enterText(field('q11800'), '5');
     await tester.pumpAndSettle();
     await tap(tester, find.byKey(const ValueKey('roz-draft-cancel')));
-    expect(openBanner, findsNothing);
-    expect(app.entryDrafts.single.data['q11800'], '2');
-    expect(text(tester, 'party'), 'Bilal');
+    expect(field('party'), findsNothing);
+    expect(canOpen(tester, draft), isTrue);
+    expect(app.entryDraft(draft.id)!.data['q11800'], '2');
+    expect(app.rozDrafts['page:open'], isNull);
 
-    // Finished on another day: it is added on its own day and goes.
-    app.setDate('2026-11-17');
-    await tester.pumpAndSettle();
-    await tap(tester, tab('drafts'));
-    await tap(tester, openButton(app.entryDrafts.single));
-    expect(app.selectedDate, '2026-11-15');
+    // Its day can be changed while it is open; Draft keeps the new day.
+    await tap(tester, openButton(draft));
+    expect(text(tester, 'q11800'), '2');
+    await tap(tester, find.byKey(const ValueKey('roz-draft-date')));
+    await tap(
+      tester,
+      find.descendant(
+        of: find.byType(DatePickerDialog),
+        matching: find.text('16'),
+      ),
+    );
+    await tap(tester, find.text('OK'));
+    expect(inRow(draft, find.text('16-11-2026')), findsOneWidget);
+    await tap(tester, draftButton);
+    expect(app.entryDraft(draft.id)!.date, '2026-11-16');
+
+    // Finished: added on its own day, it leaves the list.
+    await tap(tester, openButton(draft));
     await tester.enterText(field('rate'), '4640');
     await tester.pumpAndSettle();
     await tap(tester, addButton);
-    final sale = app.book.documents.single;
+    final sale = app.book.documents.firstWhere((d) => !d.isDraft);
     expect(sale.type, EntryType.sale);
-    expect(sale.date, '2026-11-15');
+    expect(sale.date, '2026-11-16');
     expect(sale.party, app.partyByName('Ali Traders')!.id);
     expect(sale.data['vehicle'], '92');
     expect(sale.rate, 464000);
-    expect(app.entryDrafts, isEmpty);
-    expect(openBanner, findsNothing);
+    expect(app.entryDrafts.map((d) => d.id), [other.id]);
+    expect(find.byKey(ValueKey('draft-${draft.id}')), findsNothing);
+    expect(find.textContaining('Save ho gaya'), findsOneWidget);
+    expect(canOpen(tester, other), isTrue);
+    expect(app.selectedDate, '2026-11-17');
+    expect(find.text('Drafts (1)'), findsOneWidget);
+
+    // What was typed on the tab is still there.
+    await tap(tester, tab('aamad'));
     expect(text(tester, 'party'), 'Bilal');
-    expect(find.text('Drafts'), findsOneWidget);
 
     // A correction has no Draft button.
     tester.state<RoznamchaFormState>(find.byType(RoznamchaForm)).edit(sale);
@@ -299,8 +356,8 @@ void main() {
     await finish(tester, app, db);
   });
 
-  testWidgets('Composer: Draft, then finished from the Drafts tab on its own '
-      'date', (tester) async {
+  testWidgets('Composer: Draft, then finished in its own row of the Drafts '
+      'tab on its own date: Cancel, Draft again and Add', (tester) async {
     final (app, db) = await start(tester);
     await app.saveMaster('party', {
       'name': 'PSO',
@@ -329,24 +386,65 @@ void main() {
     expect(app.book.documents.single.isDraft, isTrue);
     expect(app.book.gasGrams, 1000000);
 
-    // Listed with the company and the weight, opened on another day.
+    // Listed with the company and the weight, opened on another day: the
+    // composer opens in its row of the list, on the draft's date, with Add.
     app.setDate('2026-11-17');
     await tester.pumpAndSettle();
     await tap(tester, tab('drafts'));
     expect(find.text('PSO'), findsOneWidget);
     expect(find.textContaining('1,000 KG'), findsOneWidget);
     await tap(tester, openButton(draft));
-    expect(find.byType(EntryComposer), findsOneWidget);
+    expect(inRow(draft, find.byType(EntryComposer)), findsOneWidget);
+    expect(app.selectedDate, '2026-11-17');
+    expect(tab('drafts'), findsOneWidget);
+    expect(tab('aamad'), findsNothing);
     expect(
       inComposer(find.byKey(const ValueKey('composer-draft-open'))),
       findsOneWidget,
     );
     expect(inComposer(find.text('2026-11-16')), findsOneWidget);
     expect(inComposer(find.text('Save & next')), findsNothing);
-    expect(
-      tester.widget<TextField>(composerField('grams')).controller!.text,
-      '1000.000',
+    expect(inComposer(find.text('New entry')), findsNothing);
+    expect(inComposer(find.text('Add')), findsOneWidget);
+    expect(composerText(tester, 'grams'), '1000.000');
+
+    // Cancel closes it unchanged, and what was typed goes.
+    final rate = draft.data['rate'];
+    await tester.enterText(composerField('rate'), '150');
+    await tester.pumpAndSettle();
+    await tap(
+      tester,
+      inComposer(find.byKey(const ValueKey('composer-cancel'))),
     );
+    expect(find.byType(EntryComposer), findsNothing);
+    expect(canOpen(tester, draft), isTrue);
+    expect(app.entryDraft(draft.id)!.data['rate'], rate);
+    expect(app.composerDrafts, isEmpty);
+    expect(app.rozDrafts['page:open'], isNull);
+
+    // Leaving the page and coming back keeps it open with what was typed.
+    await tap(tester, openButton(draft));
+    expect(composerText(tester, 'rate'), isNot('150'));
+    await tester.enterText(composerField('rate'), '180');
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpPage(tester, app);
+    expect(inRow(draft, find.byType(EntryComposer)), findsOneWidget);
+    expect(composerText(tester, 'rate'), '180.00');
+
+    // Draft again updates it on its own date; the list shows again.
+    await tap(tester, inComposer(find.byKey(const ValueKey('composer-draft'))));
+    expect(find.byType(EntryComposer), findsNothing);
+    expect(app.entryDrafts.single.id, draft.id);
+    expect(app.entryDrafts.single.data['rate'], 18000);
+    expect(app.entryDrafts.single.date, '2026-11-16');
+    expect(find.textContaining('Saved to drafts'), findsOneWidget);
+    expect(app.composerDrafts, isEmpty);
+    expect(app.rozDrafts['page:open'], isNull);
+
+    // Add posts it on its own date; the list is empty.
+    await tap(tester, openButton(draft));
+    expect(composerText(tester, 'rate'), '180.00');
     await tester.enterText(composerField('rate'), '200');
     await tester.pumpAndSettle();
     await tap(tester, inComposer(find.byKey(const ValueKey('composer-save'))));
@@ -355,8 +453,12 @@ void main() {
     expect(purchase.type, EntryType.purchase);
     expect(purchase.date, '2026-11-16');
     expect(purchase.party, pso);
+    expect(purchase.value('rate'), 20000);
     expect(app.entryDrafts, isEmpty);
     expect(app.composerDrafts, isEmpty);
+    expect(find.byKey(const ValueKey('drafts-empty')), findsOneWidget);
+    expect(find.textContaining('Saved locally'), findsOneWidget);
+    expect(app.selectedDate, '2026-11-17');
 
     // A correction has no Draft button.
     unawaited(composeEntry(ctx(), app, replace: purchase));
@@ -366,6 +468,64 @@ void main() {
       findsNothing,
     );
     await tap(tester, inComposer(find.text('Cancel')));
+    await finish(tester, app, db);
+  });
+
+  testWidgets('The ✏️ of a draft row still opens it on its own tab in the '
+      'New entry dialog; finished there, it closes in the Drafts list', (
+    tester,
+  ) async {
+    final (app, db) = await start(tester);
+    final draft = await app.saveEntryDraft(
+      source: EntryDraft.roznamcha,
+      tab: 'kharcha',
+      date: app.selectedDate,
+      data: {'kind': 'cash', 'amount': '500'},
+      missing: 'Tafseel likhna zaroori hai',
+    );
+    await pumpPage(tester, app);
+    await tap(tester, tab('drafts'));
+    await tap(tester, openButton(draft));
+    expect(inRow(draft, field('amount')), findsOneWidget);
+
+    // What the ✏️ of the draft's row in the day's table calls.
+    final row = app.book.documents.single;
+    expect(row.isDraft, isTrue);
+    unawaited(
+      composeEntry(
+        tester.element(find.byType(RoznamchaForm)),
+        app,
+        replace: row,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final dialog = find.byType(Dialog);
+    Finder inDialog(Finder f) => find.descendant(of: dialog, matching: f);
+    expect(inDialog(openBanner), findsOneWidget);
+    expect(inDialog(find.byType(DraftList)), findsNothing);
+    expect(inDialog(tab('kharcha')), findsOneWidget);
+    expect(inDialog(tab('drafts')), findsNothing);
+    await tester.enterText(
+      inDialog(
+        find.descendant(
+          of: find.byKey(const ValueKey('roz-note')),
+          matching: find.byType(TextField),
+        ),
+      ),
+      'Chai',
+    );
+    await tester.pumpAndSettle();
+    await tap(tester, inDialog(addButton));
+    expect(app.entryDrafts, isEmpty);
+    expect(app.book.documents.single.isDraft, isFalse);
+    expect(app.book.documents.single.note, 'Chai');
+    await tap(tester, inDialog(find.byTooltip('Close')));
+    expect(dialog, findsNothing);
+
+    // The page's Drafts tab no longer holds it open: its tabs are back.
+    expect(tab('aamad'), findsOneWidget);
+    expect(find.byKey(const ValueKey('drafts-empty')), findsOneWidget);
+    expect(app.rozDrafts['page:open'], isNull);
     await finish(tester, app, db);
   });
 }

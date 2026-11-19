@@ -15,6 +15,7 @@ import 'package:zubair_khata_management/core/controller.dart';
 import 'package:zubair_khata_management/core/models.dart';
 import 'package:zubair_khata_management/core/organizations.dart';
 import 'package:zubair_khata_management/data/database.dart';
+import 'package:zubair_khata_management/features/ledger/profit.dart';
 import 'package:zubair_khata_management/ui/app.dart';
 import 'package:zubair_khata_management/ui/components.dart';
 import 'package:zubair_khata_management/ui/details.dart';
@@ -24,6 +25,7 @@ import 'package:zubair_khata_management/ui/masters.dart';
 import 'package:zubair_khata_management/ui/opening_balance.dart';
 import 'package:zubair_khata_management/ui/organizations_ui.dart';
 import 'package:zubair_khata_management/ui/pages.dart';
+import 'package:zubair_khata_management/ui/profit_ui.dart';
 import 'package:zubair_khata_management/ui/roznamcha_form.dart';
 import 'package:zubair_khata_management/ui/settings_page.dart';
 
@@ -238,6 +240,11 @@ Future<void> seed(AppController app) async {
   ]) {
     await app.post({'date': date, ...entry});
   }
+  // A second hospitality rate from today, so the hospitality dialog lists
+  // its schedule.
+  await app.saveProfitSettings(
+    app.profitSettings.withHospitality(150000, date),
+  );
   // Settings then also offers the backup made before a restore.
   await app.db.setMeta('pre_restore', jsonEncode(await app.backup()));
   await app.reload();
@@ -384,6 +391,21 @@ void main() {
           },
           missing: 'Enter a valid number',
         );
+        // The long sale and the purchase open in their own row of the
+        // Drafts tab (what the form keeps under `<page|dialog>:open`).
+        final openInList = <Json>[
+          {
+            ...longDraft.data,
+            'draftId': longDraft.id,
+            'draftTab': longDraft.tab,
+            'inList': true,
+          },
+          {
+            'draftId': purchaseDraft.id,
+            'source': EntryDraft.composer,
+            'inList': true,
+          },
+        ];
 
         for (final language in ['en', 'ur']) {
           await app.setLanguage(language);
@@ -483,6 +505,32 @@ void main() {
               '$tag · Business profile',
               (c) => unawaited(editProfile(c, app)),
             );
+            // Negative stock and stock entered without a cost (the seed's
+            // "Found in the store"), so both prices are asked for.
+            await dialog(
+              '$tag · Purchase price for profit',
+              (c) => unawaited(editGasPrices(c, app)),
+            );
+            await dialog(
+              '$tag · Hospitality',
+              (c) => unawaited(editHospitality(c, app)),
+            );
+            // The profit lines with the user's prices (longer details than
+            // the "purchase price not entered" ones drawn above).
+            final unpriced = app.profitSettings;
+            await app.saveProfitSettings(
+              unpriced.withPrices(
+                waiting: const GasPrice(123456789, 11800, setOn: '2026-11-19'),
+                noCost: const GasPrice(987654321, 1000000, setOn: '2026-11-19'),
+              ),
+            );
+            app.go('roznamcha');
+            await check('$tag · Roznamcha page (profit at your prices)');
+            app.go('stock');
+            await check('$tag · Stock page (profit at your prices)');
+            await app.saveProfitSettings(app.profitSettings.withPrices());
+            app.go('parties');
+            await tester.pumpAndSettle();
             await dialog(
               '$tag · Day history',
               (c) => unawaited(showHistory(c, app)),
@@ -594,6 +642,15 @@ void main() {
               ),
             );
             app.composerDrafts.remove('saved:${purchaseDraft.id}');
+            for (final open in openInList) {
+              app.rozDrafts['dialog:open'] = open;
+              await dialog(
+                '$tag · Naya entry: a ${open['source'] ?? 'roznamcha'} draft '
+                'open in the Drafts tab',
+                (c) => unawaited(openRoznamchaForm(c, app)),
+              );
+              app.rozDrafts.remove('dialog:open');
+            }
             for (final type in [
               EntryType.sale,
               EntryType.purchase,
@@ -626,6 +683,17 @@ void main() {
               '$tag · Correct purchase share (daily form)',
               (c) => unawaited(openRoznamchaForm(c, app, replace: share)),
             );
+            for (final open in openInList) {
+              app.rozDrafts['page:open'] = open;
+              app.go('roznamcha');
+              await check(
+                '$tag · Roznamcha page (a ${open['source'] ?? 'roznamcha'} '
+                'draft open in the Drafts tab)',
+              );
+              app.go('parties');
+              await tester.pumpAndSettle();
+              app.rozDrafts.remove('page:open');
+            }
             app.go('roznamcha');
             await check('$tag · Roznamcha page (after correcting a sale)');
           }

@@ -219,12 +219,40 @@ void main() {
         expect(totals.top, lessThan(title.bottom));
 
         // The figures are for the parties the list shows.
-        await tester.tap(find.widgetWithText(ChoiceChip, 'You will pay'));
+        await tester.tap(find.widgetWithText(FilterChip, 'You will pay'));
         await tester.pumpAndSettle();
         expect(count(), '1'); // Company
         expect(total('Rs 0'), findsOneWidget);
         expect(total('Rs 300'), findsOneWidget);
         expect(tester.takeException(), isNull);
+
+        // Chips add up: a second one stays on with the first, a tap on one
+        // that is on turns only it off, and All turns them all off.
+        bool on(String chip) =>
+            tester.widget<FilterChip>(find.widgetWithText(FilterChip, chip))
+                .selected;
+        await tester.tap(find.widgetWithText(FilterChip, 'You will receive'));
+        await tester.pumpAndSettle();
+        expect(count(), '3'); // Owes, Company, Both; not Clear
+        expect(on('You will pay') && on('You will receive'), isTrue);
+        expect(on('All'), isFalse);
+        await tester.tap(find.widgetWithText(FilterChip, 'You will pay'));
+        await tester.pumpAndSettle();
+        expect(count(), '2'); // Owes, Both
+        expect(on('You will pay'), isFalse);
+        expect(on('You will receive'), isTrue);
+        await tester.tap(find.widgetWithText(FilterChip, 'Companies'));
+        await tester.pumpAndSettle();
+        expect(count(), '0', reason: 'no party is marked as a company');
+        await tester.tap(find.widgetWithText(FilterChip, 'All'));
+        await tester.pumpAndSettle();
+        expect(count(), '4');
+        expect(on('All'), isTrue);
+        expect(on('You will receive') || on('Companies'), isFalse);
+        // Leave the page as the loop's checks below expect it.
+        await tester.tap(find.widgetWithText(FilterChip, 'You will pay'));
+        await tester.pumpAndSettle();
+        expect(count(), '1');
       }
       // No party is numbered: the only "1" is the count of the one party.
       expect(count(), '1');

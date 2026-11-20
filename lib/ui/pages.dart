@@ -179,12 +179,40 @@ class _ActivityPageState extends State<ActivityPage> {
   }
 }
 
-/// The parties the Parties page lists for a filter chip and the Archived
-/// switch, matching the top-bar search by name or phone. Records keep the
-/// order they were first saved in (KhataDatabase), so the reversed list is
-/// newest first. The pending balances PDF prints this same list.
-List<Record> visibleParties(AppController app, String filter, bool archived) {
+/// The Parties page's filter chips after All, in the order shown: what kind
+/// of party it is, then which way its balance points.
+const partyKindFilters = ['Customers', 'Companies', 'Udhari'];
+const partyBalanceFilters = ['You will receive', 'You will pay'];
+const partyFilters = [...partyKindFilters, ...partyBalanceFilters];
+
+/// The parties the Parties page lists for the chosen filter chips and the
+/// Archived switch, matching the top-bar search by name or phone. Several
+/// chips can be on at once: a party is listed when it is any of the chosen
+/// kinds and its balance is any of the chosen sides, so Customers with
+/// Companies lists both, and Customers with You will receive the customers
+/// who owe you. No chip (or only All) lists everyone. Records keep the order
+/// they were first saved in (KhataDatabase), so the reversed list is newest
+/// first. The pending balances PDF prints this same list.
+List<Record> visibleParties(
+  AppController app,
+  Set<String> filters,
+  bool archived,
+) {
   final b = app.book, search = app.search.toLowerCase();
+  final kinds = partyKindFilters.where(filters.contains).toList();
+  final sides = partyBalanceFilters.where(filters.contains).toList();
+  bool isKind(Record p, String kind) => switch (kind) {
+    'Customers' => p.data['customer'] == true,
+    'Companies' => p.data['supplier'] == true,
+    _ => p.data['udhari'] == true,
+  };
+  bool onSide(Record p) {
+    final owed = partyOwed(b, p.id);
+    return sides.any(
+      (side) => side == 'You will receive' ? owed.receive > 0 : owed.pay > 0,
+    );
+  }
+
   return app
       .ofKind('party', archived: archived)
       .where(
@@ -192,14 +220,8 @@ List<Record> visibleParties(AppController app, String filter, bool archived) {
             '${p.name} ${p.data['phone'] ?? ''}'.toLowerCase().contains(
               search,
             ) &&
-            switch (filter) {
-              'Customers' => p.data['customer'] == true,
-              'Companies' => p.data['supplier'] == true,
-              'Udhari' => p.data['udhari'] == true,
-              'You will receive' => partyOwed(b, p.id).receive > 0,
-              'You will pay' => partyOwed(b, p.id).pay > 0,
-              _ => true,
-            },
+            (kinds.isEmpty || kinds.any((kind) => isKind(p, kind))) &&
+            (sides.isEmpty || onSide(p)),
       )
       .toList()
       .reversed
@@ -228,7 +250,9 @@ class PartiesPage extends StatefulWidget {
 }
 
 class _PartiesPageState extends State<PartiesPage> {
-  String filter = 'All';
+  /// The filter chips that are on; none means All. A tap turns a chip on or
+  /// off without touching the others; All turns them all off.
+  final filters = <String>{};
   bool archived = false;
 
   /// The party shown beside the list. Until one is picked (or when it is
@@ -309,7 +333,7 @@ class _PartiesPageState extends State<PartiesPage> {
     final report = pendingReport(
       app,
       list,
-      filter: filter,
+      filters: partyFilters.where(filters.contains),
       archived: archived,
       search: app.search,
       urdu: app.urdu,
@@ -334,7 +358,7 @@ class _PartiesPageState extends State<PartiesPage> {
   @override
   Widget build(BuildContext context) {
     final app = widget.app, b = app.book;
-    final list = visibleParties(app, filter, archived);
+    final list = visibleParties(app, filters, archived);
     final header = [
       PageHeading(
         'Parties',
@@ -362,18 +386,18 @@ class _PartiesPageState extends State<PartiesPage> {
         spacing: 8,
         runSpacing: 8,
         children: [
-          for (final value in [
-            'All',
-            'Customers',
-            'Companies',
-            'Udhari',
-            'You will receive',
-            'You will pay',
-          ])
-            ChoiceChip(
+          FilterChip(
+            label: Text(context.t('All')),
+            selected: filters.isEmpty,
+            onSelected: (_) => setState(filters.clear),
+          ),
+          for (final value in partyFilters)
+            FilterChip(
               label: Text(context.t(value)),
-              selected: filter == value,
-              onSelected: (_) => setState(() => filter = value),
+              selected: filters.contains(value),
+              onSelected: (on) => setState(
+                () => on ? filters.add(value) : filters.remove(value),
+              ),
             ),
           FilterChip(
             label: Text(context.t('Archived')),

@@ -65,8 +65,8 @@ void main() {
       PendingOrder order = PendingOrder.balance,
     }) => pendingReport(
       app,
-      visibleParties(app, filter, archived),
-      filter: filter,
+      visibleParties(app, {filter}, archived),
+      filters: [filter],
       archived: archived,
       search: app.search,
       order: order,
@@ -111,6 +111,33 @@ void main() {
     expect(pay.notes, [
       'Total (2): You will receive 0 · You will pay +525,000',
     ]);
+    // Several chips at once: any of the chosen kinds, with a balance on any
+    // of the chosen sides. The subtitle names them in the page's order.
+    Report several(List<String> filters) => pendingReport(
+      app,
+      visibleParties(app, filters.toSet(), false),
+      filters: filters,
+      order: PendingOrder.balance,
+    );
+    final kinds = several(['Customers', 'Companies']);
+    expect(names(kinds), ['Ali Raza', 'Hassan Butt', 'PSO']);
+    expect(kinds.subtitle, contains(' · Customers, Companies · '));
+    expect(names(several(['Companies', 'Udhari', 'You will pay'])), [
+      'PSO',
+      'Umer Udhar',
+    ]);
+    expect(names(several(['Customers', 'You will receive'])), [
+      'Ali Raza',
+      'Hassan Butt',
+    ]);
+    expect(names(several(['Customers', 'You will pay'])), isEmpty);
+    expect(names(several(['You will receive', 'You will pay'])), [
+      'Ali Raza',
+      'Hassan Butt',
+      'PSO',
+      'Umer Udhar',
+    ]);
+    expect(several(['All']).subtitle, contains(' · All · '));
     // The Archived switch adds archived parties, as on the page.
     final archived = pending('All', archived: true);
     expect(names(archived), [
@@ -152,7 +179,7 @@ void main() {
       'name': 'aslam',
       'customer': true,
     }, opening: 50000);
-    final plain = pendingReport(app, visibleParties(app, 'All', false));
+    final plain = pendingReport(app, visibleParties(app, const {}, false));
     expect(names(plain), [
       'Ali Raza',
       'aslam',
@@ -194,7 +221,7 @@ void main() {
     // Urdu headings, as on the paper sheet.
     final urdu = pendingReport(
       app,
-      visibleParties(app, 'All', false),
+      visibleParties(app, const {}, false),
       urdu: true,
     );
     expect(urdu.title, 'بقایا جات');
@@ -272,8 +299,8 @@ void main() {
     }) =>
         pendingReport(
           app,
-          visibleParties(app, filter, false),
-          filter: filter,
+          visibleParties(app, {filter}, false),
+          filters: [filter],
           day: date,
           urdu: urdu,
           order: order,
@@ -373,7 +400,7 @@ void main() {
     expect(on(before).rows, hasLength(5), reason: 'the openings');
     expect(on('2026-11-05').rows, isEmpty);
     expect(on('2026-11-05').notes, isEmpty);
-    final all = pendingReport(app, visibleParties(app, 'All', false));
+    final all = pendingReport(app, visibleParties(app, const {}, false));
     expect(names(all), ['Ali Raza', 'Bilal', 'PSO', 'Umer']);
     expect(all.roznamchaSheets, isNull, reason: 'no switch');
     expect(all.sections, isEmpty);
@@ -383,7 +410,7 @@ void main() {
     // Umer's sale was paid in cash), Ali alone the day after, nobody before.
     final shaded = pendingReport(
       app,
-      visibleParties(app, 'All', false),
+      visibleParties(app, const {}, false),
       asOf: day,
     );
     // Ali's 1,000 of the day after is not in it yet.
@@ -399,7 +426,7 @@ void main() {
     expect(
       pendingReport(
         app,
-        visibleParties(app, 'All', false),
+        visibleParties(app, const {}, false),
         asOf: day,
         order: PendingOrder.balance,
       ).sections,
@@ -411,7 +438,7 @@ void main() {
     ]);
     final next = pendingReport(
       app,
-      visibleParties(app, 'All', false),
+      visibleParties(app, const {}, false),
       asOf: after,
     );
     expect(texts(next), texts(all), reason: 'nothing after it');
@@ -419,7 +446,7 @@ void main() {
     // Before the day: Hassan still owes his 5,000, nothing changed that day.
     final quiet = pendingReport(
       app,
-      visibleParties(app, 'All', false),
+      visibleParties(app, const {}, false),
       asOf: '2026-11-05',
     );
     expect(names(quiet), ['Ali Raza', 'Bilal', 'Hassan Butt', 'PSO', 'Umer']);
@@ -430,7 +457,7 @@ void main() {
     expect(
       pendingReport(
         app,
-        visibleParties(app, 'All', false),
+        visibleParties(app, const {}, false),
         day: day,
         asOf: day,
       ).sections,
@@ -580,7 +607,7 @@ void main() {
       Future<List<int>> build(bool urdu, String file) async {
         final plain = pendingReport(
           app,
-          visibleParties(app, 'All', false),
+          visibleParties(app, const {}, false),
           urdu: urdu,
           asOf: app.selectedDate,
         );
@@ -637,13 +664,13 @@ void main() {
       for (final urdu in [false, true]) {
         final day = pendingReport(
           app,
-          visibleParties(app, 'All', false),
+          visibleParties(app, const {}, false),
           day: app.selectedDate,
           urdu: urdu,
         );
         expect(
           day.rows.length,
-          pendingReport(app, visibleParties(app, 'All', false)).rows.length,
+          pendingReport(app, visibleParties(app, const {}, false)).rows.length,
         );
         for (final (report, name) in [
           (day, 'day'),

@@ -1604,9 +1604,9 @@ Report snapshotReport(AppController app, Record snapshot, {bool urdu = false}) {
 /// balance ([Book.partyBalance], both sides netted) over the whole book, or
 /// at the end of [asOf] when it is given: what you will receive is written
 /// plainly, what you will pay with a "+". Settled parties are left out; the
-/// totals are the note under the grids. [filter], [archived] and [search]
-/// only describe the list in the subtitle, which starts with [asOf] (today
-/// without it). With [asOf] the rows of the parties whose balance that
+/// totals are the note under the grids. [filters] (the page's chips that are
+/// on, All when none), [archived] and [search] only describe the list in the
+/// subtitle, which starts with [asOf] (today without it). With [asOf] the rows of the parties whose balance that
 /// day's entries changed are also [Report.sections], shaded on screen and
 /// in the PDF, with a note saying so.
 ///
@@ -1619,7 +1619,7 @@ Report snapshotReport(AppController app, Record snapshot, {bool urdu = false}) {
 Report pendingReport(
   AppController app,
   Iterable<Record> parties, {
-  String filter = 'All',
+  Iterable<String> filters = const [],
   bool archived = false,
   String search = '',
   bool urdu = false,
@@ -1705,10 +1705,14 @@ Report pendingReport(
     ]);
   }
   final term = search.trim();
+  final chosen = [
+    for (final f in filters)
+      if (f != 'All') t(f),
+  ];
   final subtitle = [
     changedOn ?? businessDate(),
     if (day != null) t('Changed on this day only'),
-    t(filter),
+    chosen.isEmpty ? t('All') : chosen.join(urdu ? '، ' : ', '),
     if (archived) t('Archived'),
     if (term.isNotEmpty) '${t('Search')}: $term',
     t(order.label),

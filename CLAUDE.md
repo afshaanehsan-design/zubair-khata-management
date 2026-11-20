@@ -16,13 +16,15 @@ Run everything from the repo root (tests read `lib/ui` and write to `build/` by 
 flutter pub get
 flutter run -d windows
 flutter analyze
-flutter test                                          # whole suite
-flutter test test/book_test.dart                      # one file
-flutter test test/book_test.dart --plain-name "FIFO"  # tests whose name contains the text
+flutter test test/book_test.dart test/roznamcha_test.dart   # the files a change needs, in one call
+flutter test test/book_test.dart --plain-name "FIFO"        # tests whose name contains the text
+flutter test                                                # whole suite: only when the user asks
 flutter build windows --release --no-pub
 flutter build apk --debug --no-pub
 powershell -NoProfile -ExecutionPolicy Bypass -File tool/package_windows.ps1   # zip the Windows release
 ```
+
+Pick the test files for a change from "Which tests to run" under Tests. Do not run the whole suite for a task.
 
 If Windows Developer Mode is off, plugin symlinks fail. Create junctions instead, then skip pub on later commands:
 
@@ -79,7 +81,7 @@ The Supabase side (`supabase/migrations/`, contract in `supabase/README.md`) re-
 | `Book._project`, FIFO and `_setOff` | `khata_private.rebuild`, `consume` |
 | `cleanDocumentData` field whitelist in `models.dart` | `khata_private.canonical_document` |
 
-A document field missing from either whitelist is silently dropped. Server changes go in a new timestamped migration using `create or replace` (as `202611070002_roznamcha_form.sql` does), never by editing an applied one. Re-run the server integration test after any accounting change.
+A document field missing from either whitelist is silently dropped. Server changes go in a new timestamped migration using `create or replace` (as `202611070002_roznamcha_form.sql` does), never by editing an applied one. Re-run the server integration test after changing a migration or the client side of these pairs (what `validateDocument` accepts, how `Book` posts, FIFO, set-off, `verifyShares`, `cleanDocumentData`). A client-only change, such as profit, reports, drafts or UI, does not need it.
 
 The client must reject at least what the server rejects, so a bad entry is refused when it is typed rather than coming back later as a rejected change. `test/validation_parity_test.dart` holds those cases; give a new server rule a case there. `restoreBackup` validates every document of a backup, so before tightening a rule, check that existing data still passes.
 
@@ -188,7 +190,55 @@ await app.initialize();
 
 Widget and report tests write preview files to `build/` (`preview-*.png`, `urdu-statement.pdf`, `urdu-statement.xlsx`). `tool/render_pdf.ps1` turns the PDF into a PNG, using `pdfium.dll` from the Windows release build, to check Urdu rendering by eye.
 
+### Which tests to run
+
+Asked for by the user on 19 November 2026, because tasks were slow: run the tests a change needs, not the whole suite. On the development laptop `flutter test` runs only two files at a time (half the processor count), every file is compiled on its own, and many files draw every page or PDF in English and Urdu, so the whole suite (45 files, about 270 tests) takes a long time.
+
+1. Run `flutter analyze` once the change compiles. It checks every file, including code that no chosen test imports, in a fraction of the suite's time.
+2. Take the files from the table below for each area you changed, and add every test file you wrote or edited. Also grep `test/` for the functions and labels you changed, to catch other files that check them (skip a name that nearly every file uses, such as `app.post`). Run them all in one call, `flutter test test/a_test.dart test/b_test.dart`: each call pays for start-up and the first compile again.
+3. While fixing a failure, re-run only that test with `--plain-name`, then its whole file once at the end. Do not re-run a file that passed unless something it covers has changed since. A change to docs, comments or `README.md` needs no test run.
+4. Run the whole suite only when the user asks for it. If a change reaches nearly everything (the shape of `Record` or `Document`, `AppController.commit` or `reload`, `Book._project`), run the Core ledger row and the rows of every feature it touches. Then end the reply by recommending a full `flutter test`, which the user can run or ask you to run.
+5. In the git worktree workflow, after merging back, run `flutter analyze` in the main tree. Run the chosen files there again only if a file needed `git merge-file`. `flutter test` fails in the main tree while the user's debug app is open, because the app locks `build\native_assets\windows\sqlite3.dll`: ask the user to close it rather than retrying.
+6. Run `tool/backend_test.dart` only when a migration or the client side of "Client and server must agree" changed. Build natively or run `tool/package_windows.ps1` only when the user asks.
+7. Say what ran: the reply and the README verification section list the test files that were run and name what was not run, normally the full suite.
+
+Test files are `test/<name>_test.dart`:
+
+| Change | Run |
+| --- | --- |
+| Core ledger: `book.dart` postings, receipts, credit notes, deposits; `models.dart`; `decimal`, `multiplyDivide` | `book`, `allocation_equivalence`, `validation_parity`, `roznamcha`, `statement` |
+| FIFO, stock, backorders, bulk KG | `fifo_backorder`, `bulk_stock`, `book` |
+| Purchase sharing, `quoteBulkCost`, `applyDailyRate` | `purchase_share`, `share_purchase`, `fifo_backorder` |
+| Party set-off, party balances | `party_set_off`, `entry_facts`, `statement` |
+| `validateDocument`, `cleanDocumentData` | `validation_parity`, `bank_lines`, `bank_lines_acceptance`, `direct_to_party`, and the backend test |
+| Bank lines, Direct to Party | `bank_lines`, `bank_lines_acceptance`, `direct_to_party` |
+| Profit (`profit.dart`, `profit_ui.dart`) | `profit`, and `fifo_backorder --plain-name "Profit"` |
+| Roznamcha day (`roznamcha.dart`) | `roznamcha`, `daily_entry`, `roznamcha_page` |
+| Naya Entry form (`roznamcha_form.dart`) | `daily_entry`, `roznamcha_page`, `entry_drafts` |
+| Entry composer (`entry_composer.dart`) | `composer_draft`, `purchase_party`, `deposit_refund`, `entry_drafts` |
+| Saved drafts (`draft_projection.dart`, `drafts.dart`) | `draft_calculations`, `entry_drafts`, `composer_draft` |
+| Closing and reopening days | `draft_calculations`, `master_opening_date`, and the backend test |
+| Entry descriptions (`entry_facts.dart`), Parties page, party details and dialogs | `entry_facts`, `party_delete`, `statement`, `master_opening_date` |
+| Opening balances | `opening_balance`, `master_opening_date` |
+| Money page, bank accounts, transfers, Money statement | `money_page` |
+| App shell, navigation, top bar | `app_start`, `widget`, `local_device` |
+| Settings, backup and restore | `pre_restore`, `database`, `conflict_ui` |
+| Something new that stores data (Reset all data) | `database`, `sync`, `organizations`, and the feature's own file |
+| Database, snapshots, Save / Agla Din / Khata Saaf | `database`, `snapshot` |
+| Sync, the command queue, conflicts | `sync`, `conflict_ui`, `local_device` |
+| Organizations | `organizations`, `app_start`, `sync` |
+| Report data, XLSX, CSV (`reports.dart`) | `reports`, `statement`, and the files a grep finds for that report's title |
+| Report PDF sheets (`report_sheet.dart`, `ReportExporter`) | `report_sheet`, `pdf_size` |
+| Roznamcha PDF (`roznamcha_sheet.dart`) | `roznamcha_sheet`, `roznamcha_compact`, `roznamcha_report` |
+| Compact reports (`daily_report.dart`) | `daily_report` |
+| Pending balances | `pending_report`, `pdf_size` |
+| PDF size slider | `pdf_size` |
+| New or changed UI text | `l10n` |
+| What a page or dialog shows (new widgets, labels, columns) | `layout_overflow`, `widget` |
+
+`layout_overflow`, `report_sheet` and `daily_report` are the heaviest files: they draw every page, or every report's PDF, in both languages. Run them only when the change is in what they draw.
+
 ## Other things to know
 
 - `windows/compat/atlstr.h` stands in for the two ATL conversions that `flutter_secure_storage` uses, so the Windows build does not need the ATL/MFC workload. Keep it.
-- `README.md` ends with dated verification sections. After a verified change, add one that says what was run and what was not re-run.
+- `README.md` ends with dated verification sections. After a verified change, add one that says which checks and test files were run and what was not run (normally the full suite).

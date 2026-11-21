@@ -33,7 +33,7 @@ String text(WidgetTester tester, String key) =>
 Finder inRow(EntryDraft d, Finder f) =>
     find.descendant(of: find.byKey(ValueKey('draft-${d.id}')), matching: f);
 
-/// Whether the Kholein button of draft [d] can be pressed.
+/// Whether the Open button of draft [d] can be pressed.
 bool canOpen(WidgetTester tester, EntryDraft d) =>
     tester.widget<TextButton>(openButton(d)).onPressed != null;
 

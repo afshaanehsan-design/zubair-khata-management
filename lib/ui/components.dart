@@ -327,6 +327,73 @@ class MetricGrid extends StatelessWidget {
   );
 }
 
+/// The Zubair Khata mark: an open khata on a rounded square. It is the
+/// drawing of the app's icons (tool/logo.ps1 for Windows and the MSIX, the
+/// Android vectors), on a 256-unit square, so the app shows the same logo as
+/// its taskbar and launcher. [background], [page] and [lines] swap for a
+/// dark surface such as the sidebar.
+class KhataLogo extends StatelessWidget {
+  final double size;
+  final Color background, page, lines;
+  const KhataLogo({
+    this.size = 43,
+    this.background = ink,
+    this.page = khataLight,
+    this.lines = ink,
+    super.key,
+  });
+  static const khataLight = Color(0xffd8e9b8);
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: CustomPaint(painter: _KhataLogoPainter(background, page, lines)),
+  );
+}
+
+class _KhataLogoPainter extends CustomPainter {
+  final Color background, page, lines;
+  const _KhataLogoPainter(this.background, this.page, this.lines);
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.shortestSide / 256);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(0, 0, 256, 256),
+        const Radius.circular(64),
+      ),
+      Paint()..color = background,
+    );
+    canvas.drawPath(
+      Path()
+        ..addPolygon(const [
+          Offset(56, 63),
+          Offset(117, 63),
+          Offset(128, 74),
+          Offset(139, 63),
+          Offset(200, 63),
+          Offset(200, 193),
+          Offset(139, 193),
+          Offset(128, 203),
+          Offset(117, 193),
+          Offset(56, 193),
+        ], true),
+      Paint()..color = page,
+    );
+    final pen = Paint()
+      ..color = lines
+      ..strokeWidth = 7;
+    canvas.drawLine(const Offset(128, 82), const Offset(128, 183), pen);
+    for (final y in const [96.0, 120.0, 144.0]) {
+      canvas.drawLine(Offset(75, y), Offset(108, y), pen);
+      canvas.drawLine(Offset(149, y), Offset(182, y), pen);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_KhataLogoPainter old) =>
+      old.background != background || old.page != page || old.lines != lines;
+}
+
 class EmptyState extends StatelessWidget {
   final String title, description;
   final Widget? action;

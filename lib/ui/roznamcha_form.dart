@@ -2255,7 +2255,7 @@ class RoznamchaFormState extends State<RoznamchaForm> {
             ),
             child: Text(
               context.t(
-                'Adhoori entries jo Draft mein rakhi hain. Kholein, poori karein aur Add karein.',
+                'Adhoori entries jo Draft mein rakhi hain. Open karein, poori karein aur Add karein.',
               ),
               style: const TextStyle(fontSize: 12.5, color: muted),
             ),

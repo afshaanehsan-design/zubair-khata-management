@@ -219,6 +219,10 @@ class DraftList extends StatelessWidget {
   }
 }
 
+/// Padding after the Open button's text. The amount above it keeps the same
+/// space at its end, so the two line up (asked for on 21 November 2026).
+const double _openEnd = 16;
+
 class _DraftRow extends StatelessWidget {
   final AppController app;
   final EntryDraft draft;
@@ -293,13 +297,18 @@ class _DraftRow extends StatelessWidget {
               ),
               if (f.amount.isNotEmpty) ...[
                 const SizedBox(width: 8),
-                Text(
-                  f.amount,
-                  textDirection: TextDirection.ltr,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: ink,
+                // Ends where the Open button's text ends, not at the card's
+                // edge: the button keeps [_openEnd] of padding after its text.
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: _openEnd),
+                  child: Text(
+                    f.amount,
+                    textDirection: TextDirection.ltr,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: ink,
+                    ),
                   ),
                 ),
               ],
@@ -363,10 +372,16 @@ class _DraftRow extends StatelessWidget {
                   key: ValueKey('draft-open-${draft.id}'),
                   style: TextButton.styleFrom(
                     visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsetsDirectional.fromSTEB(
+                      12,
+                      8,
+                      _openEnd,
+                      8,
+                    ),
                   ),
                   onPressed: onOpen == null ? null : () => onOpen!(draft),
                   icon: const Icon(Icons.edit_note_rounded, size: 18),
-                  label: Text(context.t('Kholein')),
+                  label: Text(context.t('Open')),
                 ),
               ],
             ),

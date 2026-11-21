@@ -636,7 +636,7 @@ Future<void> showTransaction(
                 onPressed: () async {
                   await composeEntry(ctx, app, replace: d);
                 },
-                child: Text(ctx.t(d.isDraft ? 'Kholein' : 'Correct entry')),
+                child: Text(ctx.t(d.isDraft ? 'Open' : 'Correct entry')),
               ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),

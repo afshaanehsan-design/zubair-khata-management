@@ -166,8 +166,8 @@ void main() {
       expect(labels[1], startsWith('Opening (sabiqa)'));
       expect(labels[2], startsWith('A: Aamad (Opening + Wasooli + Nikali) — '));
       expect(labels[3], startsWith('B: Kharcha + Bank Jama — '));
-      expect(labels[4], startsWith('Safi Baqaya = A − B (Cash in Hand) — '));
-      expect(labels[5], startsWith('Calculated Bill — '));
+      expect(labels[4], startsWith('Closing = A − B (Cash in Hand) — '));
+      expect(labels[5], startsWith('Total Sale — '));
       expect(labels[6], startsWith('Total Gas Dispatch (KG) — '));
       expect(labels[7], gasText[date]);
       expect(labels[8], 'A: Aamad / Wasooli');
@@ -183,12 +183,12 @@ void main() {
       expect(rows[4][4].numeric, app.bookAt(date).money('cash') / 100);
       expect(
         rows[4][4].numeric,
-        total(date, 'Safi Baqaya = A − B (Cash in Hand)'),
+        total(date, 'Closing = A − B (Cash in Hand)'),
       );
       expect(rows[5][4].numeric, day.bill / 100);
       expect(
         rows[5][2].text,
-        'Calculated Bill — Cylinder ${money(day.cylinderBill)} · '
+        'Total Sale — Cylinder ${money(day.cylinderBill)} · '
         'Bulk ${money(day.bulkBill)}',
       );
       // The gas line closes on the book's stock for that day.
@@ -237,7 +237,7 @@ void main() {
     );
     expect(
       two[4],
-      'Safi Baqaya = A − B (Cash in Hand) — Cash: 65,500 · Bank (aaj): -1,300',
+      'Closing = A − B (Cash in Hand) — Cash: 65,500 · Bank (aaj): -1,300',
     );
     expect(
       two[6],

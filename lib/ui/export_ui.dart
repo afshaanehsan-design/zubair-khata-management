@@ -81,7 +81,7 @@ Future<void> clearExportCopies(String organization) async {
   await deleteExportCopies(await getTemporaryDirectory(), organization);
 }
 
-/// The PDF preview of every report. Its size slider (50% to 150%) sets how big
+/// The PDF preview of every report. Its size slider (50% to 200%) sets how big
 /// the PDF prints its content ([ReportExporter.size]); what is saved, shared
 /// or printed is the PDF shown. The size is remembered for each kind of
 /// report ([AppController.pdfSize]).
@@ -246,7 +246,7 @@ PreferredSizeWidget pdfPreviewBar(
 );
 
 /// The PDF preview's size slider, under its title: smaller and bigger in 5%
-/// steps between 50% and 150%, and the percentage, which goes back to 100%
+/// steps between 50% and 200%, and the percentage, which goes back to 100%
 /// when tapped. [onSliding] follows a drag; [onSet] gets the size chosen.
 class PdfSizeBar extends StatelessWidget {
   static const height = 48.0;

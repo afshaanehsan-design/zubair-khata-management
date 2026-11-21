@@ -27,7 +27,7 @@ Future<void> shot(WidgetTester tester, GlobalKey boundary, String file) =>
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
-    'Roznamcha page shows A / B tables, Safi Baqaya and edits rows in place',
+    'Roznamcha page shows A / B tables, Closing and edits rows in place',
     (tester) async {
       await initializeDateFormatting('en');
       for (final (family, asset) in [
@@ -130,21 +130,21 @@ void main() {
       expect(find.text('Company ko payment'), findsWidgets);
       // A company payment shows who it was for (kis ke liye) and the branch.
       expect(find.text('Customer: — · Branch: Lahore'), findsOneWidget);
-      expect(find.text('Hisab Mel (Safi Baqaya kaise bana)'), findsOneWidget);
+      expect(find.text('Hisab Mel (Closing kaise bana)'), findsOneWidget);
       // No "fix the opening" button: the starting cash is an ordinary row.
       expect(find.text('Theek karo'), findsNothing);
       expect(find.byKey(const ValueKey('roz-opening-cash')), findsNothing);
       expect(find.text('Opening balance — Cash'), findsOneWidget);
       await shot(tester, boundary, 'build/preview-roznamcha.png');
 
-      // Print / PDF uses the same A → B → Safi Baqaya layout.
+      // Print / PDF uses the same A → B → Closing layout.
       final report = buildReport(app, 'Daily roznamcha', date, date);
       num? line(String label) =>
           report.rows.firstWhere((r) => r[2].text == label)[4].numeric;
       expect(line('A: Aamad / Wasooli'), isNull);
       expect(line('Kul Aamad (Wasooli + Opening + Nikali)'), 67000);
       expect(line('Kul Kharcha + Bank Jama'), 25500);
-      expect(line('Safi Baqaya = A − B (Cash in Hand)'), 41500);
+      expect(line('Closing = A − B (Cash in Hand)'), 41500);
       expect(report.rows.any((r) => r[2].text.contains('Parchi 92')), isTrue);
 
       // Edit (pencil) on the sale row loads it into the Naya Entry form.

@@ -256,20 +256,13 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                   ),
                                   child: Row(
                                     children: [
-                                      Container(
-                                        width: 43,
-                                        height: 43,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xffd8e9b8),
-                                          borderRadius: BorderRadius.circular(
-                                            13,
-                                          ),
-                                        ),
-                                        child: const Icon(
-                                          Icons.auto_stories_rounded,
-                                          color: ink,
-                                          size: 25,
-                                        ),
+                                      // On the dark sidebar the mark's
+                                      // colours swap, so it still stands out.
+                                      const KhataLogo(
+                                        size: 43,
+                                        background: KhataLogo.khataLight,
+                                        page: ink,
+                                        lines: KhataLogo.khataLight,
                                       ),
                                       if (rail) ...[
                                         const SizedBox(width: 12),
@@ -539,10 +532,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                 ),
                               )
                             else ...[
-                              const Icon(
-                                Icons.auto_stories_outlined,
-                                color: teal,
-                              ),
+                              const KhataLogo(size: 24),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(

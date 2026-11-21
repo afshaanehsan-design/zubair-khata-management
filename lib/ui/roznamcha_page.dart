@@ -489,7 +489,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
             '${t('Kharcha (cash)')} ${money(day.kharchaCash)} · ${t('Bank jama')} ${money(day.bankCust + day.depMan)}${day.direct > 0 ? ' · ${t('Direct')} ${money(day.direct)}' : ''}${day.kharchaBank > 0 ? ' · ${t('Bank se diye')} ${money(day.kharchaBank)}' : ''}',
       ),
       RozStat(
-        'Safi Baqaya = A − B (Cash in Hand)',
+        'Closing = A − B (Cash in Hand)',
         rs(day.safi),
         color: amber,
         key: const ValueKey('roz-safi'),
@@ -505,7 +505,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         ].join(' · '),
       ),
       RozStat(
-        'Calculated Bill',
+        'Total Sale',
         rs(day.bill),
         sub:
             '${t('Cylinder')} ${money(day.cylinderBill)} · ${t('Bulk')} ${money(day.bulkBill)}',
@@ -1341,7 +1341,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         }
         if (rows.isEmpty) rows.add(_empty('— Kharcha khali hai —'));
         final safiText =
-            '${t('Safi Baqaya')}: ${rs(day.safi)}${day.kharchaBank > 0 ? '  |  ${t('Bank se diye')}: ${rs(day.kharchaBank)} (${t('cash par asar nahi')})' : ''}';
+            '${t('Closing')}: ${rs(day.safi)}${day.kharchaBank > 0 ? '  |  ${t('Bank se diye')}: ${rs(day.kharchaBank)} (${t('cash par asar nahi')})' : ''}';
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1714,7 +1714,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         true,
         amber,
       ),
-      (t('Safi Baqaya = A − B (Cash in Hand)'), day.safi, true, amber),
+      (t('Closing = A − B (Cash in Hand)'), day.safi, true, amber),
       if (day.kharchaBank > 0)
         (
           t('Bank se diye kharcha (sirf bank ghata, cash par asar nahi)'),
@@ -1731,10 +1731,10 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
         ),
     ];
     return RozPanel(
-      title: 'Hisab Mel (Safi Baqaya kaise bana)',
+      title: 'Hisab Mel (Closing kaise bana)',
       subtitle: 'Har line ek raqam. Band / khol sakte ho.',
       actions: [
-        // The day's Cash book: every cash movement, closing at Safi Baqaya.
+        // The day's Cash book: every cash movement, ending at the day's Closing.
         ReportButton(
           app,
           'Cash book',
@@ -1823,7 +1823,14 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
           icon: Icon(profitOpen ? Icons.expand_less : Icons.expand_more),
         ),
       ],
-      child: profitOpen ? ProfitLines(app, profit) : const SizedBox.shrink(),
+      child: profitOpen
+          ? ProfitLines(
+              app,
+              profit,
+              from: app.selectedDate,
+              to: app.selectedDate,
+            )
+          : const SizedBox.shrink(),
     );
   }
 
@@ -1897,7 +1904,7 @@ class _RoznamchaPageState extends State<RoznamchaPage> {
   Future<void> _nextDay(RoznamchaDay day, List<Document> dayDocs) async {
     final ok = await confirmPlain(
       context,
-      '${context.t('Aaj ka Safi Baqaya')} (${rs(day.safi)}) ${context.t('agle din ka Opening ban jayega. Theek hai?')}',
+      '${context.t('Aaj ka Closing')} (${rs(day.safi)}) ${context.t('agle din ka Opening ban jayega. Theek hai?')}',
     );
     if (!ok || !mounted) return;
     final done = await perform(context, () async {

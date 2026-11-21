@@ -96,10 +96,8 @@ void main() {
     expect(all.notes, [
       'Total (4): You will receive 2,500,920 · You will pay +525,000',
     ]);
-    expect(
-      all.subtitle,
-      endsWith(' · All · Biggest balance first · + = You will pay'),
-    );
+    // No date (the print stamp has it) and no "+ = You will pay" key.
+    expect(all.subtitle, 'All · Biggest balance first');
 
     // Each filter chip prints only what it shows.
     expect(names(pending('Customers')), ['Ali Raza', 'Hassan Butt']);
@@ -121,7 +119,7 @@ void main() {
     );
     final kinds = several(['Customers', 'Companies']);
     expect(names(kinds), ['Ali Raza', 'Hassan Butt', 'PSO']);
-    expect(kinds.subtitle, contains(' · Customers, Companies · '));
+    expect(kinds.subtitle, 'Customers, Companies · Biggest balance first');
     expect(names(several(['Companies', 'Udhari', 'You will pay'])), [
       'PSO',
       'Umer Udhar',
@@ -137,7 +135,7 @@ void main() {
       'PSO',
       'Umer Udhar',
     ]);
-    expect(several(['All']).subtitle, contains(' · All · '));
+    expect(several(['All']).subtitle, 'All · Biggest balance first');
     // The Archived switch adds archived parties, as on the page.
     final archived = pending('All', archived: true);
     expect(names(archived), [
@@ -147,12 +145,12 @@ void main() {
       'PSO',
       'Umer Udhar',
     ]);
-    expect(archived.subtitle, contains(' · All · Archived · '));
+    expect(archived.subtitle, startsWith('All · Archived · '));
     // So does the search in the top bar (name or phone).
     app.search = '0300';
     final found = pending('All');
     expect(names(found), ['Hassan Butt']);
-    expect(found.subtitle, contains(' · All · Search: 0300 · '));
+    expect(found.subtitle, startsWith('All · Search: 0300 · '));
     // Nothing pending: no rows and no totals.
     app.search = 'Bilal';
     expect(pending('All').rows, isEmpty);
@@ -188,7 +186,7 @@ void main() {
       'PSO',
       'Umer Udhar',
     ]);
-    expect(plain.subtitle, endsWith(' · All · A to Z · + = You will pay'));
+    expect(plain.subtitle, 'All · A to Z');
     expect(
       [for (final row in plain.rows) row[0].text],
       ['1', '2', '3', '4', '5', '6'],
@@ -212,7 +210,7 @@ void main() {
       'Hassan Butt',
       'Ali Raza',
     ]);
-    expect(newest.subtitle, contains(' · Newest first · '));
+    expect(newest.subtitle, 'All · Newest first');
     // The order never changes the totals.
     for (final order in PendingOrder.values) {
       expect(pending('All', order: order).notes, plain.notes);
@@ -324,10 +322,9 @@ void main() {
     expect(report.notes, [
       'Total (3): You will receive 6,000 · You will pay +12,000',
     ]);
-    expect(
-      report.subtitle,
-      '$day · Changed on this day only · All · A to Z · + = You will pay',
-    );
+    // The day is the print stamp's, not repeated in the heading.
+    expect(report.subtitle, 'Changed on this day only · All · A to Z');
+    expect(report.date, day);
     // Largest first, to receive before to pay (the cleared khata's 0 ends
     // the receivables), or newest first; the Details table follows suit.
     expect(names(on(day, order: PendingOrder.balance)), [
@@ -356,10 +353,8 @@ void main() {
     expect(texts(detailed), texts(report), reason: 'rows unchanged');
     final sheet = detailed.sheets.single;
     expect(sheet.title, '${app.businessName} — Pending balances');
-    expect(
-      sheet.heading,
-      '10-11-2026 · Changed on this day only · All · A to Z · + = You will pay',
-    );
+    expect(sheet.stamp, startsWith('Date: 10-11-2026 | Print: '));
+    expect(sheet.heading, 'Changed on this day only · All · A to Z');
     List<String> line(List<SheetCell> cells) => [for (final c in cells) c.text];
     final table = sheet.tables.single;
     expect(line(table.head), [
@@ -405,7 +400,7 @@ void main() {
     expect(all.roznamchaSheets, isNull, reason: 'no switch');
     expect(all.sections, isEmpty);
     // On the top bar's date the complete sheet is the balances at the end of
-    // that day, with that date in its subtitle, and shades the parties whose
+    // that day, with that date in its print stamp, and shades the parties whose
     // balance the day changed: Ali and PSO on the day (Hassan is settled,
     // Umer's sale was paid in cash), Ali alone the day after, nobody before.
     final shaded = pendingReport(
@@ -420,7 +415,9 @@ void main() {
       ['3', 'PSO', '+12,000'],
       ['4', 'Umer', '2,000'],
     ]);
-    expect(shaded.subtitle, '$day · All · A to Z · + = You will pay');
+    expect(shaded.subtitle, 'All · A to Z');
+    expect(shaded.date, day);
+    expect(shaded.withCompact(true).date, day, reason: 'kept by the switch');
     expect(shaded.sections, {0, 2});
     // The shading follows its rows into another order.
     expect(

@@ -122,12 +122,12 @@ class DirectLine {
 /// Mirrors `computeDay()` of the original page:
 ///   A (Kul Aamad)  = opening + cash wasooli + bank wasooli + bank se nikali
 ///   B              = cash kharcha + bank wasooli (auto jama) + cash → bank
-///   Safi Baqaya    = A − B = cash in hand
+///   Closing        = A − B = cash in hand (the page's Safi Baqaya)
 /// Money a customer paid straight to another party ("Direct to Party", not on
 /// the original page) is treated like a bank wasooli: it is wasooli in A and
 /// an automatic payment to that party in B, so cash in hand does not move.
 /// Cash corrections, deposits and cash paid with purchases are included so
-/// Safi Baqaya always equals the ledger's real closing cash.
+/// Closing always equals the ledger's real closing cash.
 class RoznamchaDay {
   final String date;
   final int opening;

@@ -47,4 +47,20 @@ void main() {
     }
     expect(missing, isEmpty);
   });
+
+  test('The detailed profit only uses translated labels', () {
+    // What we have and Why (position.dart), also printed in the Profit
+    // report; a call may break its text onto the next line.
+    final missing = <String>{};
+    final pattern = RegExp(r"\bt\(\s*'([^'\$\r\n]+)'");
+    final source = File('lib/features/ledger/position.dart').readAsStringSync();
+    var found = 0;
+    for (final match in pattern.allMatches(source)) {
+      found++;
+      final key = match.group(1)!;
+      if (!Words.hasUrdu(key)) missing.add(key);
+    }
+    expect(found, greaterThan(40));
+    expect(missing, isEmpty);
+  });
 }

@@ -36,6 +36,8 @@ $sdkBin = Get-ChildItem $kits -Directory |
 if (-not $sdkBin) { throw 'Windows 10/11 SDK (makeappx.exe, signtool.exe) not found.' }
 $makeappx = Join-Path $sdkBin.FullName 'x64\makeappx.exe'
 $signtool = Join-Path $sdkBin.FullName 'x64\signtool.exe'
+$makepri = Join-Path $sdkBin.FullName 'x64\makepri.exe'
+if (-not (Test-Path -LiteralPath $makepri)) { throw "makepri.exe not found in $($sdkBin.FullName)\x64" }
 
 # --- Version from pubspec: 1.2.3+4 -> 1.2.3.4 --------------------------------
 $versionLine = Select-String -Path (Join-Path $projectRoot 'pubspec.yaml') -Pattern '^version:\s*(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?' | Select-Object -First 1
@@ -99,32 +101,28 @@ foreach ($dll in @('msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntim
     if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $layout }
 }
 
-# Logos, drawn from the launcher icon.
-Add-Type -AssemblyName System.Drawing
-$iconSource = Join-Path $projectRoot 'android\app\src\main\res\mipmap-xxxhdpi\ic_launcher.png'
+# Logos, drawn from the one Zubair Khata mark (tool/logo.ps1) at every size
+# Windows asks for, so none is a scaled copy. The names carry MRT qualifiers
+# and resources.pri (made below) tells Windows which file is which:
+#   targetsize-N_altform-unplated   taskbar, Start, Alt+Tab, Explorer (rounded)
+#   targetsize-N / scale-N          the same on a coloured plate (full square)
+#   Square150x150 / Wide310x150     Start tiles; StoreLogo: the installer
+. (Join-Path $PSScriptRoot 'logo.ps1')
 $assets = Join-Path $layout 'Assets'
 New-Item -ItemType Directory -Force $assets | Out-Null
-function Save-Logo([int]$width, [int]$height, [string]$name) {
-    $source = [System.Drawing.Image]::FromFile($iconSource)
-    try {
-        $bitmap = New-Object System.Drawing.Bitmap $width, $height
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-        $graphics.Clear([System.Drawing.Color]::Transparent)
-        $side = [Math]::Min($width, $height)
-        $graphics.DrawImage($source, [int](($width - $side) / 2), [int](($height - $side) / 2), $side, $side)
-        $graphics.Dispose()
-        $bitmap.Save((Join-Path $assets $name), [System.Drawing.Imaging.ImageFormat]::Png)
-        $bitmap.Dispose()
-    } finally { $source.Dispose() }
+foreach ($scale in @(100, 125, 150, 200, 400)) {
+    $f = $scale / 100
+    $px = { param($n) [int][Math]::Round($n * $f, [MidpointRounding]::AwayFromZero) }
+    Save-KhataPng -Path (Join-Path $assets "Square44x44Logo.scale-$scale.png") -Width (& $px 44)
+    Save-KhataPng -Path (Join-Path $assets "Square150x150Logo.scale-$scale.png") -Width (& $px 150)
+    Save-KhataPng -Path (Join-Path $assets "Wide310x150Logo.scale-$scale.png") -Width (& $px 310) -Height (& $px 150)
+    Save-KhataPng -Path (Join-Path $assets "StoreLogo.scale-$scale.png") -Width (& $px 50) -Rounded
 }
-Save-Logo 50 50 'StoreLogo.png'
-Save-Logo 44 44 'Square44x44Logo.png'
-Save-Logo 44 44 'Square44x44Logo.targetsize-44_altform-unplated.png'
-Save-Logo 150 150 'Square150x150Logo.png'
-Save-Logo 310 150 'Wide310x150Logo.png'
+foreach ($size in @(16, 20, 24, 30, 32, 36, 40, 44, 48, 60, 64, 72, 80, 96, 256)) {
+    Save-KhataPng -Path (Join-Path $assets "Square44x44Logo.targetsize-$size.png") -Width $size
+    Save-KhataPng -Path (Join-Path $assets "Square44x44Logo.targetsize-${size}_altform-unplated.png") -Width $size -Rounded
+    Save-KhataPng -Path (Join-Path $assets "Square44x44Logo.targetsize-${size}_altform-lightunplated.png") -Width $size -Rounded
+}
 
 # Manifest. File-system and registry write virtualization are switched off
 # (unvirtualizedResources), so the khata stays in the real
@@ -170,6 +168,37 @@ $manifest = @"
 </Package>
 "@
 Set-Content -LiteralPath (Join-Path $layout 'AppxManifest.xml') -Value $manifest -Encoding utf8
+
+# resources.pri: the index of the qualified logo files, named as the manifest
+# asks for them (Files/Assets/...). The index starts at the package root,
+# because starting at Assets drops "Assets/" from the names; the app opens its
+# own files by path, so their being indexed too changes nothing. No
+# <packaging> section, so nothing is split into resource packages.
+$priConfig = Join-Path $projectRoot 'build\msix\priconfig.xml'
+Set-Content -LiteralPath $priConfig -Encoding utf8 -Value @'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<resources targetOsVersion="10.0.0" majorVersion="1">
+  <index root="\" startIndexAt="\">
+    <default>
+      <qualifier name="Language" value="en-US"/>
+      <qualifier name="Contrast" value="standard"/>
+      <qualifier name="Scale" value="100"/>
+      <qualifier name="HomeRegion" value="001"/>
+      <qualifier name="TargetSize" value="256"/>
+      <qualifier name="LayoutDirection" value="LTR"/>
+      <qualifier name="Theme" value="dark"/>
+      <qualifier name="AlternateForm" value=""/>
+      <qualifier name="DXFeatureLevel" value="DX9"/>
+      <qualifier name="Configuration" value=""/>
+      <qualifier name="DeviceFamily" value="Universal"/>
+      <qualifier name="Custom" value=""/>
+    </default>
+    <indexer-config type="folder" foldernameAsQualifier="true" filenameAsQualifier="true" qualifierDelimiter="."/>
+  </index>
+</resources>
+'@
+& $makepri new /pr $layout /cf $priConfig /mn (Join-Path $layout 'AppxManifest.xml') /of (Join-Path $layout 'resources.pri') /o | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'makepri failed' }
 
 # --- Pack and sign ----------------------------------------------------------------
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null

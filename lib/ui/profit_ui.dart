@@ -4,6 +4,7 @@ import '../core/controller.dart';
 import '../core/models.dart';
 import '../features/ledger/book.dart' show Book;
 import '../features/ledger/entry_facts.dart' show entryTitle;
+import '../features/ledger/position.dart';
 import '../features/ledger/profit.dart';
 import '../features/reports/reports.dart' show buildReport, kg;
 import 'components.dart';
@@ -47,13 +48,145 @@ class _Line {
   });
 }
 
+const _lineStyle = TextStyle(fontSize: 12.5, color: ink);
+const _lineBold = TextStyle(
+  fontSize: 12.5,
+  color: ink,
+  fontWeight: FontWeight.w700,
+);
+
+/// One line of the profit sections: its label, what it is made of and any
+/// button under it, and its amount on the end side.
+class _LineRow extends StatelessWidget {
+  final _Line line;
+  const _LineRow(this.line);
+
+  @override
+  Widget build(BuildContext context) {
+    final l = line, amount = l.amount;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 11),
+      decoration: BoxDecoration(
+        color: l.total ? rozSoft : null,
+        border: const Border(bottom: BorderSide(color: Color(0xffe9eee8))),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l.label,
+                  style: (l.total ? _lineBold : _lineStyle).copyWith(
+                    color: l.color,
+                  ),
+                ),
+                if (l.detail != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      l.detail!,
+                      style: const TextStyle(fontSize: 11.5, color: muted),
+                    ),
+                  ),
+                if (l.action != null)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: l.action,
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  amount == null ? '—' : rs(amount),
+                  textDirection: TextDirection.ltr,
+                  style: (l.total ? _lineBold : _lineStyle).copyWith(
+                    color: l.color,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A note under the profit lines, with an optional button beside it.
+class _Note extends StatelessWidget {
+  final String text;
+  final Widget? action;
+  const _Note(this.text, [this.action]);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(11, 8, 11, 0),
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 6,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 1),
+              child: Icon(Icons.info_outline_rounded, size: 15, color: amber),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                text,
+                style: const TextStyle(fontSize: 11.5, color: muted),
+              ),
+            ),
+          ],
+        ),
+        ?action,
+      ],
+    ),
+  );
+}
+
+/// A small text button under a profit line ("Purchase price", "Change").
+Widget _lineButton(
+  BuildContext context,
+  String label,
+  IconData icon,
+  Key key,
+  VoidCallback onTap,
+) => TextButton.icon(
+  key: key,
+  style: TextButton.styleFrom(
+    visualDensity: VisualDensity.compact,
+    padding: const EdgeInsets.symmetric(horizontal: 6),
+    minimumSize: const Size(0, 30),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  ),
+  onPressed: onTap,
+  icon: Icon(icon, size: 16),
+  label: Text(context.t(label)),
+);
+
 /// "How profit is calculated": every step from sales to net profit, one
 /// line each, with what each figure is made of. The Roznamcha shows a day's,
-/// the Stock page a period's.
+/// the Stock page a period's. Given the period ([from] to [to]) it also
+/// offers Simple or Detailed, and Detailed adds what the business has at the
+/// end of [to] and why ([PositionLines]).
 class ProfitLines extends StatelessWidget {
   final AppController app;
   final Profit profit;
-  const ProfitLines(this.app, this.profit, {super.key});
+  final String? from, to;
+  const ProfitLines(this.app, this.profit, {this.from, this.to, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -63,18 +196,7 @@ class ProfitLines extends StatelessWidget {
       if (g.setOn.isNotEmpty) '(${t('your price')}, ${dmy(g.setOn)})',
     ].join(' ');
     Widget button(String label, IconData icon, Key key, VoidCallback onTap) =>
-        TextButton.icon(
-          key: key,
-          style: TextButton.styleFrom(
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            minimumSize: const Size(0, 30),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          onPressed: onTap,
-          icon: Icon(icon, size: 16),
-          label: Text(t(label)),
-        );
+        _lineButton(context, label, icon, key, onTap);
     Widget priceButton(String tag) => button(
       'Purchase price',
       Icons.price_change_outlined,
@@ -174,108 +296,158 @@ class ProfitLines extends StatelessWidget {
       if (p.historical)
         (t('Historical summaries make profit provisional.'), null),
     ];
-    const style = TextStyle(fontSize: 12.5, color: ink);
-    const bold = TextStyle(
-      fontSize: 12.5,
-      color: ink,
-      fontWeight: FontWeight.w700,
+    final from = this.from, to = this.to;
+    final period = from != null && to != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (period) ProfitViewChoice(app),
+        for (final l in lines) _LineRow(l),
+        for (final (text, action) in notes) _Note(text, action),
+        if (notes.isNotEmpty) const SizedBox(height: 10),
+        if (period && app.profitDetailed) PositionLines(app, from, to),
+      ],
+    );
+  }
+}
+
+/// Simple or Detailed: the profit alone, or also what the business has and
+/// why (asked for by the user on 21 November 2026). One choice for both
+/// profit sections and the Profit report they open.
+class ProfitViewChoice extends StatelessWidget {
+  final AppController app;
+  const ProfitViewChoice(this.app, {super.key});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: Color(0xffe9eee8))),
+    ),
+    child: Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final (detailed, name, label) in [
+          (false, 'Simple', context.t('Simple')),
+          (true, 'Detailed', context.t('Detailed')),
+        ])
+          ChoiceChip(
+            key: ValueKey('profit-view-$name'),
+            label: Text(label),
+            selected: app.profitDetailed == detailed,
+            onSelected: (_) => app.setProfitDetailed(detailed),
+          ),
+        if (!app.profitDetailed)
+          Text(
+            context.t(
+              'Detailed adds cash, banks, pendings and stock: how much we have, and why.',
+            ),
+            style: const TextStyle(fontSize: 11.5, color: muted),
+          ),
+      ],
+    ),
+  );
+}
+
+/// The heading of a part of the detailed profit, with what it shows.
+class _PartHeading extends StatelessWidget {
+  final String title;
+  final String? intro;
+  const _PartHeading(this.title, [this.intro, Key? key]) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(11, 12, 11, 8),
+    decoration: const BoxDecoration(
+      color: rozSoft2,
+      border: Border(bottom: BorderSide(color: Color(0xffe9eee8))),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w700,
+            color: ink,
+          ),
+        ),
+        if (intro != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 3),
+            child: Text(
+              intro!,
+              style: const TextStyle(fontSize: 11.5, color: muted),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+/// The Detailed part of a profit section ([from] to [to]): what the business
+/// has at the end of [to], line by line with what each figure is and why it
+/// is added or taken off, then how the profit of the period took what it had
+/// at the end of the day before [from] to that.
+class PositionLines extends StatelessWidget {
+  final AppController app;
+  final String from, to;
+  const PositionLines(this.app, this.from, this.to, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.t, words = context.words;
+    final change = app.positionChange(from, to);
+    final (have, notes) = whatWeHaveLines(
+      change.end,
+      app.profitSettings,
+      words,
+      rs: rs,
+      name: app.name,
+      date: dmy,
+    );
+    final bridge = whyLines(change, words, date: dmy);
+    var prices = 0;
+    _Line line(PositionLine l) => _Line(
+      l.label,
+      l.amount,
+      detail: l.detail,
+      total: l.total,
+      color: l.total ? ((l.amount ?? 0) < 0 ? rozRed : teal) : null,
+      action: l.price
+          ? _lineButton(
+              context,
+              'Purchase price',
+              Icons.price_change_outlined,
+              ValueKey('position-price-${prices++}'),
+              () => editGasPrices(context, app),
+            )
+          : null,
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final l in lines)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 11),
-            decoration: BoxDecoration(
-              color: l.total ? rozSoft : null,
-              border: const Border(
-                bottom: BorderSide(color: Color(0xffe9eee8)),
-              ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        l.label,
-                        style: (l.total ? bold : style).copyWith(
-                          color: l.color,
-                        ),
-                      ),
-                      if (l.detail != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            l.detail!,
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              color: muted,
-                            ),
-                          ),
-                        ),
-                      if (l.action != null)
-                        Align(
-                          alignment: AlignmentDirectional.centerStart,
-                          child: l.action,
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Align(
-                    alignment: AlignmentDirectional.centerEnd,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        l.amount == null ? '—' : rs(l.amount!),
-                        textDirection: TextDirection.ltr,
-                        style: (l.total ? bold : style).copyWith(
-                          color: l.color,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+        _PartHeading(
+          t('What we have at the end of {date}').replaceAll('{date}', dmy(to)),
+          t(
+            'Everything the business has, less everything it still has to pay.',
           ),
-        for (final (text, action) in notes)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(11, 8, 11, 0),
-            child: Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 6,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 1),
-                      child: Icon(
-                        Icons.info_outline_rounded,
-                        size: 15,
-                        color: amber,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        text,
-                        style: const TextStyle(fontSize: 11.5, color: muted),
-                      ),
-                    ),
-                  ],
-                ),
-                ?action,
-              ],
-            ),
-          ),
+          const ValueKey('position-have'),
+        ),
+        for (final l in have) _LineRow(line(l)),
+        for (final note in notes) _Note(note),
         if (notes.isNotEmpty) const SizedBox(height: 10),
+        _PartHeading(
+          t('Why: how profit became what we have'),
+          t(
+            'Profit is what you earned. What we have is where the money is now. This joins the two.',
+          ),
+          const ValueKey('position-why'),
+        ),
+        for (final l in bridge) _LineRow(line(l)),
       ],
     );
   }
@@ -297,10 +469,23 @@ class ReportButton extends StatelessWidget {
       visualDensity: VisualDensity.compact,
       padding: const EdgeInsets.symmetric(horizontal: 8),
     ),
-    onPressed: () => previewReport(
-      context,
-      buildReport(app, kind, from, to, urdu: app.urdu),
-    ),
+    onPressed: () {
+      // The Profit report follows the profit sections' Simple / Detailed
+      // choice, and its preview's Detailed switch changes that choice.
+      final profit = kind == 'Profit report';
+      previewReport(
+        context,
+        buildReport(
+          app,
+          kind,
+          from,
+          to,
+          urdu: app.urdu,
+          detailed: profit && app.profitDetailed,
+        ),
+        onCompact: profit ? app.setProfitDetailed : null,
+      );
+    },
     icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
     label: Text(
       context.t('Report'),
@@ -373,7 +558,7 @@ class StockProfit extends StatelessWidget {
               ],
             ),
           ),
-          ProfitLines(app, profit),
+          ProfitLines(app, profit, from: from, to: to),
         ],
       ),
     );

@@ -50,7 +50,7 @@ Future<void> showOrganizations(BuildContext context, AppController app) async {
                     overflow: TextOverflow.ellipsis,
                     textDirection: o.email == null ? null : TextDirection.ltr,
                   ),
-                  trailing: o.id == orgs.current.id ? const Tag('Open') : null,
+                  trailing: o.id == orgs.current.id ? const Tag('Open now') : null,
                   onTap: o.id == orgs.current.id
                       ? null
                       : () => Navigator.pop(ctx, o.id),

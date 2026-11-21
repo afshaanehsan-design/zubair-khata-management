@@ -392,9 +392,9 @@ void main() {
       ['Cash', '', '111,000', '1,000', '0', '112,000'],
       ['Faisal', 'Alfalah', '129,600', '5,000', '0', '134,600'],
       ['Old', 'HBL', '5,000', '0', '5,000', '0'],
-      ['Cash', '', '111,000', '1,000', '0', '112,000'],
-      ['Total bank', '', '134,600', '5,000', '5,000', '134,600'],
-      ['Total (Cash + Bank)', '', '245,600', '6,000', '5,000', '246,600'],
+      ['Closing Cash', '', '111,000', '1,000', '0', '112,000'],
+      ['Total Bank Accounts', '', '134,600', '5,000', '5,000', '134,600'],
+      ['Total Mojood (Cash + Bank Accounts)', '', '245,600', '6,000', '5,000', '246,600'],
     ]);
     // The same Total bank as the page's card.
     expect(app.bookAt(today).bankMoney, 13460000);
@@ -403,21 +403,13 @@ void main() {
     final sheet = report.sheets.single;
     expect(sheet.title, 'Cash and bank statement');
     expect(sheet.stamp, startsWith('Date: ${rozDmy(today)} | Print: '));
-    expect(
-      sheet.heading,
-      '${rozDmy(today)} Total (Cash + Bank): Rs. 246,600',
-    );
-    expect([for (final c in sheet.summary.head) c.text], [
-      'CASH',
-      'TOTAL BANK',
-      'TOTAL (CASH + BANK)',
-    ]);
-    expect([for (final c in sheet.summary.body.single) c.text], [
-      'Rs. 112,000 Opening 111,000',
-      'Rs. 134,600 Opening 134,600',
-      'Rs. 246,600 Cash 112,000 | Bank 134,600',
-    ]);
-    final accounts = sheet.table('Cash and bank accounts')!;
+    // No heading line or summary row: the stamp has the date and the
+    // totals are the table's last rows.
+    expect(sheet.heading, isEmpty);
+    expect(sheet.summary.head, isEmpty);
+    // One table, with no heading above it.
+    final accounts = sheet.tables.single;
+    expect(accounts.title, isEmpty);
     expect([for (final c in accounts.head) c.text], [
       '#',
       'ACCOUNT',
@@ -442,9 +434,9 @@ void main() {
         for (final row in accounts.foot) [for (final c in row) c.text],
       ],
       [
-        ['Cash', '111,000', '1,000', '0', '112,000'],
-        ['Total bank', '134,600', '5,000', '5,000', '134,600'],
-        ['Total (Cash + Bank)', '245,600', '6,000', '5,000', '246,600'],
+        ['Closing Cash', '111,000', '1,000', '0', '112,000'],
+        ['Total Bank Accounts', '134,600', '5,000', '5,000', '134,600'],
+        ['Total Mojood (Cash + Bank Accounts)', '245,600', '6,000', '5,000', '246,600'],
       ],
     );
     expect(accounts.foot.first.first.span, 3);
@@ -454,9 +446,9 @@ void main() {
     // Yesterday: Old still held its 5,000, and both totals count it.
     final before = moneyReport(app, yesterday);
     expect(table(before).skip(3), [
-      ['Cash', '', '0', '111,000', '0', '111,000'],
-      ['Total bank', '', '0', '134,600', '0', '134,600'],
-      ['Total (Cash + Bank)', '', '0', '245,600', '0', '245,600'],
+      ['Closing Cash', '', '0', '111,000', '0', '111,000'],
+      ['Total Bank Accounts', '', '0', '134,600', '0', '134,600'],
+      ['Total Mojood (Cash + Bank Accounts)', '', '0', '245,600', '0', '245,600'],
     ]);
     expect(app.bookAt(yesterday).bankMoney, 13460000);
 
@@ -467,16 +459,16 @@ void main() {
     expect(table(moneyReport(app, tomorrow)).map((r) => r.first), [
       'Cash',
       'Faisal',
-      'Cash',
-      'Total bank',
-      'Total (Cash + Bank)',
+      'Closing Cash',
+      'Total Bank Accounts',
+      'Total Mojood (Cash + Bank Accounts)',
     ]);
 
     // Urdu headings.
     final urdu = moneyReport(app, today, urdu: true);
     expect(urdu.title, 'نقد اور بینک کی تفصیل');
-    expect(urdu.rows.last.first.text, 'کل (نقد + بینک)');
-    expect(urdu.sheets.single.summary.head[1].text, 'کل بینک');
+    expect(urdu.rows.last.first.text, 'کل موجود (نقد + بینک اکاؤنٹس)');
+    expect(urdu.rows[urdu.rows.length - 2].first.text, 'کل بینک اکاؤنٹس');
     app.dispose();
     await db.close();
   });

@@ -22,6 +22,8 @@ import '../ledger/entry_facts.dart'
         entryHeadline,
         entryTitle,
         entryTypeLabel;
+import '../ledger/position.dart'
+    show PositionLine, whatWeHaveLines, whyLines;
 import '../ledger/profit.dart' show GasPrice;
 import '../ledger/roznamcha.dart';
 import 'report_sheet.dart';
@@ -85,6 +87,10 @@ class Report {
   /// statement', 'Pending balances', 'Invoice'...). The PDF preview remembers
   /// its size slider by it ([AppController.pdfSize]).
   final String kind;
+
+  /// The date the grid PDF's print stamp names ([grids] above 1): the day the
+  /// list is for. Today when null.
+  final String? date;
   const Report({
     required this.title,
     required this.business,
@@ -102,6 +108,7 @@ class Report {
     this.roznamchaSheets,
     this.sheetSwitch = 'Compact',
     this.kind = '',
+    this.date,
   });
 
   Report withCompact(bool value) =>
@@ -123,6 +130,7 @@ class Report {
         roznamchaSheets: roznamchaSheets,
         sheetSwitch: sheetSwitch,
         kind: kind,
+        date: date,
       );
 }
 
@@ -155,6 +163,9 @@ Report buildReport(
   String? party,
   String? account,
   bool urdu = false,
+  // The Profit report's sheet with "What we have" and "Why" (the profit
+  // sections' Detailed view); its preview switch is called Detailed.
+  bool detailed = false,
 }) {
   final t = Words(urdu), book = app.bookAt(to);
   final docs = book.documents
@@ -171,6 +182,8 @@ Report buildReport(
   final sections = <int>{};
   final sheets = <RozSheet>[];
   List<RozSheet> Function(bool)? roznamchaSheets;
+  // The PDF preview's switch for [roznamchaSheets] and whether it starts on.
+  var sheetSwitch = 'Compact', switchOn = false;
   void add(List<dynamic> values) =>
       rows.add(values.map((v) => v is Cell ? v : Cell('$v')).toList());
   void section(String date, String label) {
@@ -898,6 +911,78 @@ Report buildReport(
           numbered: false,
         ),
       ];
+      // Detailed (asked for by the user on 21 November 2026): what the
+      // business has at the end of [to] and how the profit became it, as the
+      // profit sections show them. The preview's Detailed switch prints the
+      // sheet with or without them; the table, Excel and CSV keep the rows.
+      final profitTables = tables;
+      late final change = app.positionChange(from, to);
+      SheetTable lineTable(String title, List<PositionLine> lines) =>
+          reportTable(
+            t,
+            title: title,
+            columns: [t('Description'), t('Explanation'), t('Amount')],
+            rows: [
+              for (final l in lines)
+                [
+                  // Helvetica has no − (U+2212): the sheet prints -.
+                  Cell(l.label.replaceFirst('− ', '- ')),
+                  Cell(l.detail ?? ''),
+                  if (l.amount case final amount?)
+                    Cell.amount(amount)
+                  else
+                    const Cell(''),
+                ],
+            ],
+            boldRows: {
+              for (final (i, l) in lines.indexed)
+                if (l.total) i,
+            },
+            numbered: false,
+          );
+      RozSheet profitSheet(bool on) {
+        final extra = <SheetTable>[], extraNotes = <String>[];
+        if (on) {
+          final (have, haveNotes) = whatWeHaveLines(
+            change.end,
+            settings,
+            t,
+            rs: rs,
+            name: app.name,
+            date: rozDmy,
+          );
+          extra.addAll([
+            lineTable(
+              t('What we have at the end of {date}')
+                  .replaceAll('{date}', rozDmy(to)),
+              have,
+            ),
+            lineTable(
+              t('Why: how profit became what we have'),
+              whyLines(change, t, date: rozDmy),
+            ),
+          ]);
+          extraNotes.addAll(haveNotes);
+        }
+        return reportSheet(
+          date: to,
+          title: '${app.businessName} — ${t(kind)}',
+          stamp: rozStamp(app.selectedDate, t),
+          heading: [
+            dates,
+            ...heading,
+            if (on) '${t('What we have')}: ${rs(change.end.total)}',
+          ].where((s) => s.trim().isNotEmpty).join(' · '),
+          figures: figures,
+          tables: [...profitTables, ...extra],
+          notes: [...notes, ...extraNotes],
+        );
+      }
+
+      sheetSwitch = 'Detailed';
+      switchOn = detailed;
+      roznamchaSheets = (on) => [profitSheet(on)];
+      sheets.add(profitSheet(detailed));
     case 'Cylinder custody':
       // Only who holds our cylinders: full/empty counts in the shop are not
       // kept (fills are never entered; gas is tracked by KG).
@@ -978,7 +1063,7 @@ Report buildReport(
         ..addAll([for (final (_, r) in ordered) r]);
     case 'Daily roznamcha':
       // Printed like the original page: the day's overview (the page's
-      // opening strip and summary cards), A (Aamad), B (Kharcha), Safi Baqaya.
+      // opening strip and summary cards), A (Aamad), B (Kharcha), Closing.
       columns = ['Date', 'Reference', 'Description', 'Name', 'Amount'];
       final cash = book.ledger('money:cash');
       String name(Document d) => d.party.isEmpty ? '' : app.name(d.party);
@@ -1051,11 +1136,11 @@ Report buildReport(
           if (day.kharchaBank > 0)
             '${t('Bank se diye')} ${money(day.kharchaBank)}',
         ], Cell.amount(day.rightTotal));
-        overview(t('Safi Baqaya = A − B (Cash in Hand)'), [
+        overview(t('Closing = A − B (Cash in Hand)'), [
           '${t('Cash')}: ${money(day.safi)}',
           '${t('Bank (aaj)')}: ${day.bankNet > 0 ? '+' : ''}${money(day.bankNet)}',
         ], Cell.amount(day.safi));
-        overview(t('Calculated Bill'), [
+        overview(t('Total Sale'), [
           '${t('Cylinder')} ${money(day.cylinderBill)}',
           '${t('Bulk')} ${money(day.bulkBill)}',
         ], Cell.amount(day.bill));
@@ -1248,7 +1333,7 @@ Report buildReport(
         add([
           date,
           '',
-          t('Safi Baqaya = A − B (Cash in Hand)'),
+          t('Closing = A − B (Cash in Hand)'),
           '',
           Cell.amount(day.safi),
         ]);
@@ -1273,7 +1358,8 @@ Report buildReport(
       }
       // The PDF: each day as the original page's history sheet. One day
       // asked for (the Roznamcha page's Print / PDF) is printed even empty.
-      final stamp = rozStamp(app.selectedDate, t);
+      // Each day's stamp names that day, all with one moment of printing.
+      final printed = DateTime.now();
       final printDays = days.isEmpty && from == to
           ? [
               RoznamchaDay(
@@ -1291,9 +1377,9 @@ Report buildReport(
             app,
             day,
             t,
-            stamp: stamp,
             saved: rozSavedCopy(app, day),
             compact: compact,
+            printed: printed,
           ),
       ];
       sheets.addAll(roznamchaSheets(false));
@@ -1416,6 +1502,8 @@ Report buildReport(
     sections: sections,
     sheets: sheets,
     roznamchaSheets: roznamchaSheets,
+    compact: switchOn,
+    sheetSwitch: sheetSwitch,
   );
 }
 
@@ -1556,10 +1644,10 @@ Report snapshotReport(AppController app, Record snapshot, {bool urdu = false}) {
     book.money('cash') - book.dayMovement(date, 'money:cash'),
     docs,
   );
-  final stamp = rozStamp(app.selectedDate, t);
+  final printed = DateTime.now();
   final saved = rozSavedTime('${snapshot.data['savedAt'] ?? ''}');
   List<RozSheet> sheets(bool compact) => [
-    rozSheet(app, day, t, stamp: stamp, saved: saved, compact: compact),
+    rozSheet(app, day, t, saved: saved, compact: compact, printed: printed),
   ];
   return Report(
     kind: 'Daily roznamcha',
@@ -1606,9 +1694,10 @@ Report snapshotReport(AppController app, Record snapshot, {bool urdu = false}) {
 /// plainly, what you will pay with a "+". Settled parties are left out; the
 /// totals are the note under the grids. [filters] (the page's chips that are
 /// on, All when none), [archived] and [search] only describe the list in the
-/// subtitle, which starts with [asOf] (today without it). With [asOf] the rows of the parties whose balance that
-/// day's entries changed are also [Report.sections], shaded on screen and
-/// in the PDF, with a note saying so.
+/// subtitle; the print stamp names [asOf] ([Report.date], today without it).
+/// With [asOf] the rows of the parties whose balance that day's entries
+/// changed are also [Report.sections], shaded on screen and in the PDF, with
+/// a note saying so.
 ///
 /// With [day] it is that day's sheet instead: only the parties whose balance
 /// that day's entries changed, each with its balance at the end of the day,
@@ -1709,15 +1798,16 @@ Report pendingReport(
     for (final f in filters)
       if (f != 'All') t(f),
   ];
+  // The date is the print stamp's, not repeated here (asked for by the user
+  // on 21 November 2026, with the "+ = You will pay" key the totals explain).
   final subtitle = [
-    changedOn ?? businessDate(),
     if (day != null) t('Changed on this day only'),
     chosen.isEmpty ? t('All') : chosen.join(urdu ? '، ' : ', '),
     if (archived) t('Archived'),
     if (term.isNotEmpty) '${t('Search')}: $term',
     t(order.label),
-    '+ = ${t('You will pay')}',
   ].join(' · ');
+  final date = changedOn ?? businessDate();
   final notes = [
     if (rows.isNotEmpty)
       '${t('Total')} (${rows.length}): ${t('You will receive')} ${money(receive)} · ${t('You will pay')} +${money(pay)}',
@@ -1729,8 +1819,8 @@ Report pendingReport(
     reportSheet(
       date: day!,
       title: '${app.businessName} — ${t('Pending balances')}',
-      stamp: rozStamp(businessDate(), t),
-      heading: sheetDates(subtitle),
+      stamp: rozStamp(date, t),
+      heading: subtitle,
       figures: [
         SheetFigure(t('Previous balance'), owed(net - debits + credits).text, [
           '${t('Parties')} ${details.length}',
@@ -1785,6 +1875,7 @@ Report pendingReport(
         ? null
         : (on) => on ? detailed() : const <RozSheet>[],
     sheetSwitch: 'Details',
+    date: date,
   );
 }
 
@@ -1802,11 +1893,11 @@ class _MoneyDay {
 }
 
 /// The Money page's Statement: cash and every bank account at the end of
-/// [date] (the top bar's day), then Cash, Total bank and Total (Cash + Bank).
+/// [date] (the top bar's day), then Closing Cash, Total Bank Accounts and
+/// Total Mojood (Cash + Bank Accounts).
 /// The PDF is printed like the Roznamcha sheet (one [RozSheet], laid out by
-/// [rozSheetPdf]): title and print stamp, the day with its total, a summary
-/// row like the page's cards, then each account's opening, money in and out
-/// on [date], and closing. An archived account is listed only when it held
+/// [rozSheetPdf]): title and print stamp, then each account's opening, money
+/// in and out on [date], and closing. An archived account is listed only when it held
 /// or moved money that day, so the totals are always the page's cards.
 Report moneyReport(AppController app, String date, {bool urdu = false}) {
   final t = Words(urdu), book = app.bookAt(date);
@@ -1852,13 +1943,6 @@ Report moneyReport(AppController app, String date, {bool urdu = false}) {
         bold: bold,
         numeric: true,
       );
-  SheetCell figure(int v, List<String> notes) => SheetCell([
-    [
-      SheetRun('Rs. ${money(v)}', bold: true),
-      const SheetRun(' '),
-      SheetRun(notes.join(' | '), small: true),
-    ],
-  ]);
   List<SheetCell> totalRow(String label, _MoneyDay v) => [
     SheetCell.text(label, bold: true, span: 3),
     amount(v.opening, bold: true),
@@ -1871,31 +1955,16 @@ Report moneyReport(AppController app, String date, {bool urdu = false}) {
     date: date,
     title: t('Cash and bank statement'),
     stamp: rozStamp(date, t),
-    heading:
-        '${rozDmy(date)} ${t('Total (Cash + Bank)')}: Rs. ${money(total.closing)}',
-    summary: SheetTable(
-      title: '',
-      wrap: const {0, 1, 2},
-      head: [
-        head(t('Cash')),
-        head(t('Total bank')),
-        head(t('Total (Cash + Bank)')),
-      ],
-      body: [
-        [
-          figure(cash.closing, ['${t('Opening')} ${money(cash.opening)}']),
-          figure(banks.closing, ['${t('Opening')} ${money(banks.opening)}']),
-          figure(total.closing, [
-            '${t('Cash')} ${money(cash.closing)}',
-            '${t('Bank')} ${money(banks.closing)}',
-          ]),
-        ],
-      ],
-      top: true,
-    ),
+    // No heading or summary row (asked for by the user on 21 November
+    // 2026): the stamp already gives the date and the totals are the
+    // table's last rows.
+    heading: '',
+    summary: const SheetTable(title: '', head: [], body: [], wrap: {}),
     tables: [
       SheetTable(
-        title: t('Cash and bank accounts'),
+        // No heading above the table (asked for by the user on 21
+        // November 2026): the sheet's title already says what it is.
+        title: '',
         // Account and Bank.
         wrap: const {1, 2},
         head: [
@@ -1933,9 +2002,9 @@ Report moneyReport(AppController app, String date, {bool urdu = false}) {
             ],
         ],
         foot: [
-          totalRow(t('Cash'), cash),
-          totalRow(t('Total bank'), banks),
-          totalRow(t('Total (Cash + Bank)'), total),
+          totalRow(t('Closing Cash'), cash),
+          totalRow(t('Total Bank Accounts'), banks),
+          totalRow(t('Total Mojood (Cash + Bank Accounts)'), total),
         ],
       ),
     ],
@@ -1963,9 +2032,9 @@ Report moneyReport(AppController app, String date, {bool urdu = false}) {
     ].map(t.call).toList(),
     rows: [
       for (final (a, v) in lines) row(name(a), bank(a), v),
-      row(t('Cash'), '', cash),
-      row(t('Total bank'), '', banks),
-      row(t('Total (Cash + Bank)'), '', total),
+      row(t('Closing Cash'), '', cash),
+      row(t('Total Bank Accounts'), '', banks),
+      row(t('Total Mojood (Cash + Bank Accounts)'), '', total),
     ],
     urdu: urdu,
     sheets: [sheet],
@@ -2407,7 +2476,7 @@ class ReportExporter {
   ReportExporter({this.progress, double size = 1})
     : size = size.clamp(minSize, maxSize).toDouble();
 
-  static const minSize = .5, maxSize = 1.5;
+  static const minSize = .5, maxSize = 2.0;
 
   /// Every report's PDF is in the Roznamcha sheet's design: its own sheets
   /// (the Roznamcha, the statements, the registers, the invoice), or one
@@ -2509,6 +2578,7 @@ class ReportExporter {
         final at = head || i == 0
             ? pw.Alignment.center
             : pw.Alignment.centerRight;
+        // The column after the row number is the name, printed bold.
         widgets.add(
           pw.Container(
             height: head ? headHeight : rowHeight,
@@ -2520,7 +2590,7 @@ class ReportExporter {
                     head ? cells[i].toUpperCase() : cells[i],
                     textSize,
                     at,
-                    bold: head,
+                    bold: head || i == 1,
                   ),
           ),
         );
@@ -2553,7 +2623,7 @@ class ReportExporter {
         fontFallback: [fallback],
       ),
     );
-    final stamp = rozStamp(businessDate(), Words(report.urdu));
+    final stamp = rozStamp(report.date ?? businessDate(), Words(report.urdu));
     final perPage = rowsPerGrid * report.grids;
     final pages = math.max(1, (body.length / perPage).ceil());
     final blank = List.filled(report.columns.length, '');

@@ -182,7 +182,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Switch or add organization'));
     await tester.pumpAndSettle();
-    expect(find.text('Open'), findsOneWidget);
+    expect(find.text('Open now'), findsOneWidget);
     await tester.tap(find.text('New organization'));
     await tester.pumpAndSettle();
     await tester.enterText(

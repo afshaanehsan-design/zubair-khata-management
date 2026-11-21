@@ -1,4 +1,4 @@
-// The PDF preview's size slider: 50% to 150% in 5% steps, remembered for
+// The PDF preview's size slider: 50% to 200% in 5% steps, remembered for
 // each kind of report until a reset, and printed into the PDF itself.
 import 'dart:convert';
 import 'dart:io';
@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zubair_khata_management/core/controller.dart';
 import 'package:zubair_khata_management/data/database.dart';
 import 'package:zubair_khata_management/features/reports/reports.dart';
+import 'package:zubair_khata_management/features/reports/roznamcha_sheet.dart';
 import 'package:zubair_khata_management/ui/export_ui.dart';
 
 Future<(AppController, KhataDatabase)> start() async {
@@ -50,16 +51,18 @@ Report longList({required bool urdu, int grids = 1, int rows = 150}) => Report(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('The size is remembered for each kind of report, 50% to 150%', () async {
+  test('The size is remembered for each kind of report, 50% to 200%', () async {
     final (app, db) = await start();
     expect(app.pdfSize('Party statement'), 100);
     await app.setPdfSize('Party statement', 120);
     await app.setPdfSize('Pending balances', 52); // to the 5% step: 50
-    await app.setPdfSize('Invoice', 400); // at most 150
+    await app.setPdfSize('Sales register', 175); // above the old 150
+    await app.setPdfSize('Invoice', 400); // at most 200
     await app.setPdfSize('Cash book', 10); // at least 50
     expect(app.pdfSize('Party statement'), 120);
     expect(app.pdfSize('Pending balances'), 50);
-    expect(app.pdfSize('Invoice'), 150);
+    expect(app.pdfSize('Sales register'), 175);
+    expect(app.pdfSize('Invoice'), 200);
     expect(app.pdfSize('Cash book'), 50);
     expect(app.pdfSize('Daily roznamcha'), 100);
     // Back to 100% forgets it.
@@ -71,7 +74,8 @@ void main() {
     final again = AppController(db);
     await again.initialize();
     expect(again.pdfSize('Party statement'), 120);
-    expect(again.pdfSize('Invoice'), 150);
+    expect(again.pdfSize('Sales register'), 175);
+    expect(again.pdfSize('Invoice'), 200);
     expect(again.pdfSize('Cash book'), 100);
 
     // A damaged value only loses the sizes.
@@ -103,20 +107,38 @@ void main() {
     await db.close();
   });
 
-  test('The exporter keeps the size between 50% and 150%', () {
+  test('The exporter keeps the size between 50% and 200%', () {
     expect(ReportExporter().size, 1);
+    expect(ReportExporter(size: 2).size, 2);
     expect(ReportExporter(size: 3).size, ReportExporter.maxSize);
     expect(ReportExporter(size: .1).size, ReportExporter.minSize);
     expect(ReportExporter.minSize, AppController.pdfSizeMin / 100);
     expect(ReportExporter.maxSize, AppController.pdfSizeMax / 100);
   });
 
+  test('A wide table shrinks to fit; above 150% as far as at 150%', () {
+    // Up to 150% as it always was: down to 85% of the size, then it wraps.
+    expect(sheetScale(1, 1), 1);
+    expect(sheetScale(1, .9), .9);
+    expect(sheetScale(1, .5), 1 * .85);
+    expect(sheetScale(.5, .5), .5 * .85);
+    expect(sheetScale(1.5, .5), 1.5 * .85);
+    // Above it a narrow table still grows to the full size and a wider one
+    // as far as the page allows, but a very wide one prints as at 150%
+    // instead of at 85% of 200%, where its figures broke.
+    expect(sheetScale(2, 1), 2);
+    expect(sheetScale(2, .8), 1.6);
+    expect(sheetScale(2, .5), 1.5 * .85);
+    expect(sheetScale(1.75, .2), 1.5 * .85);
+  });
+
   test('Pending balances grids hold more rows smaller, fewer bigger', () {
     expect(ReportExporter.gridRowsAt(1), ReportExporter.gridRows);
     expect(ReportExporter.gridRowsAt(.5), 97);
     expect(ReportExporter.gridRowsAt(1.5), 27);
+    expect(ReportExporter.gridRowsAt(2), 18);
     var previous = 1 << 30;
-    for (var p = 50; p <= 150; p += 5) {
+    for (var p = 50; p <= 200; p += 5) {
       final rows = ReportExporter.gridRowsAt(p / 100);
       expect(rows, lessThanOrEqualTo(previous), reason: '$p%');
       previous = rows;
@@ -167,7 +189,13 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('pdf-size-reset')));
     expect(chosen, [75, 70, 100]);
 
+    // 150% is no longer the end: bigger goes on to 200%.
+    chosen.clear();
     await show(150);
+    await tester.tap(find.byKey(const ValueKey('pdf-size-bigger')));
+    expect(chosen, [155]);
+    await show(200);
+    expect(find.text('200%'), findsOneWidget);
     expect(iconEnabled('pdf-size-bigger'), isFalse);
     expect(iconEnabled('pdf-size-smaller'), isTrue);
     await show(50);
@@ -183,6 +211,13 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(chosen.last, 50);
+    await show(100);
+    await tester.drag(
+      find.byKey(const ValueKey('pdf-size')),
+      const Offset(2000, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(chosen.last, 200);
   });
 
   testWidgets('Bigger prints more pages, smaller fewer, in both languages', (
@@ -213,7 +248,7 @@ void main() {
         for (final grids in [1, 2]) {
           final report = longList(urdu: urdu, grids: grids);
           final pages = <int, int>{};
-          for (final percent in [50, 100, 150]) {
+          for (final percent in [50, 100, 150, 200]) {
             final bytes = await ReportExporter(
               size: percent / 100,
             ).pdf(report);
@@ -226,6 +261,7 @@ void main() {
           final what = '$language, ${grids > 1 ? 'grids' : 'sheet'}: $pages';
           expect(pages[50]!, lessThan(pages[100]!), reason: what);
           expect(pages[100]!, lessThan(pages[150]!), reason: what);
+          expect(pages[150]!, lessThan(pages[200]!), reason: what);
           // 100% is the PDF as it was before the slider.
           expect(
             pagesOf(await ReportExporter().pdf(report)),
@@ -233,8 +269,8 @@ void main() {
             reason: what,
           );
           if (grids > 1) {
-            // 150 rows: 97, 45 and 27 to a grid, two grids to a page.
-            expect(pages, {50: 1, 100: 2, 150: 3}, reason: what);
+            // 150 rows: 97, 45, 27 and 18 to a grid, two grids to a page.
+            expect(pages, {50: 1, 100: 2, 150: 3, 200: 5}, reason: what);
           }
         }
       }

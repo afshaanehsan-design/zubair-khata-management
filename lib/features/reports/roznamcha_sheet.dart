@@ -30,10 +30,13 @@ import 'reports.dart'
 
 // The Roznamcha PDF, printed like the original page's "Roznamcha History
 // (Date wise)" export (index.html: renderHistory and exportData): a title and
-// print stamp, the day with its Safi Baqaya, the summary figures, then
-// A (Aamad / Wasooli), Bank Nikali / Less and B (Kharcha + Bank Jama). What
-// the original page could not hold (direct payments, opening balances, gas
-// and stock entries) is added only on the days that have it.
+// print stamp (the day, and when it was saved for a saved copy), the summary
+// figures, then A (Aamad / Wasooli), Bank Nikali / Less and B (Kharcha + Bank
+// Jama). What the original page could not hold (direct payments, opening
+// balances, gas and stock entries) is added only on the days that have it.
+// The page's bold line with the day, the saved time and the closing is not
+// printed: the stamp and the summary already hold them (asked for by the user
+// on 21 November 2026).
 
 /// A piece of text in a cell of the sheet.
 class SheetRun {
@@ -161,9 +164,13 @@ String rozSavedTime(String savedAt) {
   return time == null ? savedAt : rozTime(time.toLocal());
 }
 
-/// The line under the title: the app's date and the moment of printing.
-String rozStamp(String date, Words t, [DateTime? now]) =>
-    '${t('Date')}: ${rozDmy(date)} | ${t('Print')}: ${rozTime(now ?? DateTime.now())}';
+/// The line under the title: the app's date and the moment of printing, with
+/// when the printed copy was saved between them when it is one ([saved]).
+String rozStamp(String date, Words t, {String saved = '', DateTime? now}) => [
+  '${t('Date')}: ${rozDmy(date)}',
+  if (saved.isNotEmpty) '${t('Saved')}: $saved',
+  '${t('Print')}: ${rozTime(now ?? DateTime.now())}',
+].join(' | ');
 
 /// When [day] was saved (Roznamcha Save, Agla Din), if its latest saved copy
 /// still holds exactly its entries ([AppController.saveSnapshot]'s test);
@@ -216,14 +223,15 @@ final _rli = String.fromCharCode(0x2067);
 final _pdi = String.fromCharCode(0x2069);
 
 /// [day] laid out as the original page's history print. [saved] is when the
-/// printed copy was saved ('' when it is not a saved copy).
+/// printed copy was saved ('' when it is not a saved copy); the stamp names
+/// both, with the moment of printing ([printed], now when null).
 RozSheet rozSheet(
   AppController app,
   RoznamchaDay day,
   Words t, {
-  required String stamp,
   String saved = '',
   bool compact = false,
+  DateTime? printed,
 }) {
   final short = compact;
   String oneLine(String s) =>
@@ -286,7 +294,7 @@ RozSheet rozSheet(
   ];
 
   // ---------- summary (the history print's four cards, then the Roznamcha
-  // page's Total Gas Dispatch and Calculated Bill, with the screen's figures,
+  // page's Total Gas Dispatch and Total Sale, with the screen's figures,
   // printed on every day, at 0 when nothing was sold) ----------
 
   SheetCell figure(String value, List<String> notes) => SheetCell([
@@ -314,9 +322,9 @@ RozSheet rozSheet(
       head(t('Opening')),
       head(t('A: Kul Aamad')),
       head(t('B: Kharcha + Bank Jama')),
-      head(t('Safi Baqaya')),
+      head(t('Closing')),
       head(t('Total Gas Dispatch (KG)')),
-      head(t('Calculated Bill')),
+      head(t('Total Sale')),
     ],
     body: [
       [
@@ -742,12 +750,10 @@ RozSheet rozSheet(
   return RozSheet(
     date: day.date,
     title: '${t('Roznamcha History')} — ${t('Roznamcha History (Date wise)')}',
-    stamp: stamp,
-    heading: _join([
-      rozDmy(day.date),
-      if (saved.isNotEmpty) '${t('Saved')}: $saved',
-      '${t('Safi Baqaya')}: Rs. ${money(day.safi)}',
-    ], ' '),
+    // The day's own date, also when a range prints several days or the top
+    // bar is on another day; the summary prints the closing.
+    stamp: rozStamp(day.date, t, saved: saved, now: printed),
+    heading: '',
     summary: summary,
     tables: [
       a,
@@ -787,8 +793,21 @@ const _padX = 3.8, _padY = 2.2;
 /// Column heads are spaced out a little, as the page's `letter-spacing`.
 const _headSpacing = .2;
 
-/// The smallest a wide day's tables print at, so they stay easy to read.
-const _minScale = .85;
+/// The smallest a wide day's tables print at, so they stay easy to read:
+/// [_minScale] of the chosen size, or of [_minScaleTop] (150%, the size
+/// slider's old top) when the size is bigger. See [sheetScale].
+const _minScale = .85, _minScaleTop = 1.5;
+
+/// The zoom of a sheet's tables at the preview's [size], when [fit] (at
+/// most 1) of that size is what lets its widest table keep its lines: as
+/// big as the page allows, up to [size]. A table too wide even so prints at
+/// [_minScale] of [size], or of 150% for a bigger size, and wraps. At 85% of
+/// 200% a wide day had no room left and its figures broke in the middle, so
+/// above 150% it shrinks as far as it would at 150%; narrow tables still
+/// grow to the full size.
+double sheetScale(double size, double fit) =>
+    math.max(size * fit, _minScale * math.min(size, _minScaleTop));
+
 const _ink = PdfColors.black;
 const _grey = PdfColor.fromInt(0xff555555);
 const _muted = PdfColor.fromInt(0xff6b7686);
@@ -820,8 +839,8 @@ Future<Uint8List> rozSheetPdf(
 
   // The page's zoom: the original shrank its whole print to fit the widest
   // table, so a day with wide content prints a little smaller here too (the
-  // tables only, and not below [_minScale] of the chosen size); what is
-  // still too wide wraps.
+  // tables only, and not below [_minScale] of the chosen size, or of 150%
+  // above it: [sheetScale]); what is still too wide wraps.
   var scale = size;
   double text() => _textSize * scale;
   double small() => _smallSize * scale;
@@ -1123,7 +1142,7 @@ Future<Uint8List> rozSheetPdf(
       // 1% to spare for the slack that does not shrink with the type.
       fit = math.min(fit, width * .99 / sum(weights(t, wants)));
     }
-    scale = size * math.max(_minScale, fit);
+    scale = sheetScale(size, fit);
     final content = <pw.Widget>[
       await line(
         [SheetRun(sheet.title)],
@@ -1137,15 +1156,19 @@ Future<Uint8List> rozSheetPdf(
         size: gap(_stampSize),
         color: _grey,
       ),
-      pw.SizedBox(height: gap(5)),
-      await line(
-        [SheetRun(sheet.heading)],
-        width,
-        size: gap(_headingSize),
-        bold: true,
-      ),
+      // An empty heading (the Money statement's, the Roznamcha's) takes no
+      // space; the summary then keeps the gap the heading had above it.
+      if (sheet.heading.isNotEmpty) ...[
+        pw.SizedBox(height: gap(5)),
+        await line(
+          [SheetRun(sheet.heading)],
+          width,
+          size: gap(_headingSize),
+          bold: true,
+        ),
+      ],
       if (sheet.summary.head.isNotEmpty) ...[
-        pw.SizedBox(height: gap(2.5)),
+        pw.SizedBox(height: gap(sheet.heading.isEmpty ? 5 : 2.5)),
         await table(sheet.summary),
       ],
     ];

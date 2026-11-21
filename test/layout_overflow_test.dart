@@ -515,8 +515,15 @@ void main() {
               '$tag · Hospitality',
               (c) => unawaited(editHospitality(c, app)),
             );
+            // Detailed profit (21 November 2026): what we have and why, with
+            // gas that has no price yet (its Purchase price buttons).
+            app.setProfitDetailed(true);
+            app.go('roznamcha');
+            await check('$tag · Roznamcha page (detailed profit)');
+            app.go('stock');
+            await check('$tag · Stock page (detailed profit)');
             // The profit lines with the user's prices (longer details than
-            // the "purchase price not entered" ones drawn above).
+            // the "purchase price not entered" ones drawn above), Detailed.
             final unpriced = app.profitSettings;
             await app.saveProfitSettings(
               unpriced.withPrices(
@@ -528,6 +535,7 @@ void main() {
             await check('$tag · Roznamcha page (profit at your prices)');
             app.go('stock');
             await check('$tag · Stock page (profit at your prices)');
+            app.setProfitDetailed(false);
             await app.saveProfitSettings(app.profitSettings.withPrices());
             app.go('parties');
             await tester.pumpAndSettle();
@@ -538,7 +546,7 @@ void main() {
             // The PDF preview's title bar and size slider (the PDF itself is
             // built in the background, which a widget test cannot wait for).
             for (final (label, size) in [
-              (null, 150.0),
+              (null, 200.0),
               ('Compact', 100.0),
               ('Details', 50.0),
             ]) {

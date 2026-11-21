@@ -373,7 +373,7 @@ void main() {
           roz.firstWhere((r) => r[2].text.startsWith(label))[4].text;
       expect(line('Aaj ki Wasooli (cash + bank + direct)'), '400,000');
       expect(line('Direct to party · Wasooli — Umer'), '400,000');
-      expect(line('Safi Baqaya'), '0');
+      expect(line('Closing'), '0');
       final slip = invoiceReport(app, d).rows;
       expect(
         slip.any(

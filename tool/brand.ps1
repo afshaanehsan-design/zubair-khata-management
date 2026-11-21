@@ -1,25 +1,21 @@
-﻿# Generate the native Windows book mark from simple vector geometry.
-Add-Type -AssemblyName System.Drawing
+﻿# Writes the app's icons from the one drawing in tool/logo.ps1:
+#   windows/runner/resources/app_icon.ico      window, taskbar and exe icon
+#   android/app/src/main/res/mipmap-*/ic_launcher.png
+#                                               launcher icon before Android 8
+#                                               (8 and later use the adaptive
+#                                               icon in mipmap-anydpi-v26)
+#
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tool/brand.ps1
+#
+# The MSIX logos are drawn by tool/build_msix.ps1 when it packages.
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'logo.ps1')
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$bitmap = New-Object System.Drawing.Bitmap 256,256
-$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-$graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-$inkColor = [System.Drawing.ColorTranslator]::FromHtml('#183E37')
-$lightColor = [System.Drawing.ColorTranslator]::FromHtml('#D8E9B8')
-$graphics.Clear($inkColor)
-$brush = New-Object System.Drawing.SolidBrush $lightColor
-$pen = New-Object System.Drawing.Pen $inkColor,7
-$points = [System.Drawing.Point[]]@((New-Object System.Drawing.Point 56,63),(New-Object System.Drawing.Point 117,63),(New-Object System.Drawing.Point 128,74),(New-Object System.Drawing.Point 139,63),(New-Object System.Drawing.Point 200,63),(New-Object System.Drawing.Point 200,193),(New-Object System.Drawing.Point 139,193),(New-Object System.Drawing.Point 128,203),(New-Object System.Drawing.Point 117,193),(New-Object System.Drawing.Point 56,193))
-$graphics.FillPolygon($brush,$points)
-$graphics.DrawLine($pen,128,82,128,183)
-foreach($y in @(96,120,144)){$graphics.DrawLine($pen,75,$y,108,$y);$graphics.DrawLine($pen,149,$y,182,$y)}
-$memory = New-Object System.IO.MemoryStream
-$bitmap.Save($memory,[System.Drawing.Imaging.ImageFormat]::Png)
-$bytes = $memory.ToArray()
-$target = Join-Path $projectRoot 'windows/runner/resources/app_icon.ico'
-$stream = [System.IO.File]::Create($target)
-$writer = New-Object System.IO.BinaryWriter $stream
-$writer.Write([UInt16]0);$writer.Write([UInt16]1);$writer.Write([UInt16]1)
-$writer.Write([byte]0);$writer.Write([byte]0);$writer.Write([byte]0);$writer.Write([byte]0)
-$writer.Write([UInt16]1);$writer.Write([UInt16]32);$writer.Write([UInt32]$bytes.Length);$writer.Write([UInt32]22);$writer.Write($bytes)
-$writer.Dispose();$stream.Dispose();$memory.Dispose();$pen.Dispose();$brush.Dispose();$graphics.Dispose();$bitmap.Dispose()
+
+Save-KhataIco -Path (Join-Path $projectRoot 'windows\runner\resources\app_icon.ico')
+
+$res = Join-Path $projectRoot 'android\app\src\main\res'
+$densities = [ordered]@{ 'mdpi' = 48; 'hdpi' = 72; 'xhdpi' = 96; 'xxhdpi' = 144; 'xxxhdpi' = 192 }
+foreach ($density in $densities.Keys) {
+    Save-KhataPng -Path (Join-Path $res "mipmap-$density\ic_launcher.png") -Width $densities[$density] -Rounded
+}

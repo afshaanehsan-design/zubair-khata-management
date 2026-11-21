@@ -11,6 +11,7 @@ import '../data/sync.dart';
 import '../data/secure_auth.dart';
 import '../features/ledger/book.dart';
 import '../features/ledger/draft_projection.dart';
+import '../features/ledger/position.dart';
 import '../features/ledger/profit.dart';
 import 'models.dart';
 import 'organizations.dart';
@@ -98,11 +99,17 @@ class AppController extends ChangeNotifier {
   /// reset leaves it alone.
   ProfitPeriod profitPeriod = ProfitPeriod.month;
 
+  /// Whether the profit sections are Detailed: what the business has at the
+  /// end of the day and how the profit became it, besides the profit (asked
+  /// for by the user on 21 November 2026). A view setting like [page], so a
+  /// reset leaves it alone.
+  bool profitDetailed = false;
+
   /// The PDF preview's size slider, in percent, by [Report.kind]. Saved in
   /// this organization's metadata (`pdf_sizes`), so it is remembered on this
   /// device until a reset. See [pdfSize].
   final pdfSizes = <String, int>{};
-  static const pdfSizeMin = 50, pdfSizeMax = 150, pdfSizeStep = 5;
+  static const pdfSizeMin = 50, pdfSizeMax = 200, pdfSizeStep = 5;
   String device = '';
   String? owner;
   String? lastError;
@@ -246,6 +253,53 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setProfitDetailed(bool value) {
+    if (value == profitDetailed) return;
+    profitDetailed = value;
+    notifyListeners();
+  }
+
+  final _positions = <String, Position>{};
+  final _changes = <String, PositionChange>{};
+
+  /// What the business has at the end of [date] (`position.dart`): the book
+  /// through that day, with the cost later purchases gave gas that waited
+  /// and the hospitality of every KG sold up to it. Kept until [reload].
+  Position position(String date) {
+    if (_positions.length > 40) _positions.clear();
+    return _positions.putIfAbsent(
+      date,
+      () => positionAt(
+        bookAt(date),
+        book,
+        profitSettings,
+        profit(ProfitPeriod.all.range(date).$1, date),
+        date,
+      ),
+    );
+  }
+
+  /// How the profit of the entries dated [from] to [to] became the change
+  /// in what the business has from the end of the day before [from] to the
+  /// end of [to]. Kept until [reload].
+  PositionChange positionChange(String from, String to) {
+    if (_changes.length > 40) _changes.clear();
+    return _changes.putIfAbsent('$from|$to', () {
+      final before = dayBefore(from);
+      return positionChangeOf(
+        start: position(before),
+        end: position(to),
+        startBook: bookAt(before),
+        endBook: bookAt(to),
+        all: book,
+        settings: profitSettings,
+        profit: profit(from, to),
+        from: from,
+        to: to,
+      );
+    });
+  }
+
   int get pendingCount => commands
       .where((c) => ['queued', 'sending', 'accepted'].contains(c.status))
       .length;
@@ -380,6 +434,8 @@ class AppController extends ChangeNotifier {
     _book = null;
     _datedBooks.clear();
     _profits.clear();
+    _positions.clear();
+    _changes.clear();
     _quoteKey = null;
   }
 
@@ -388,7 +444,7 @@ class AppController extends ChangeNotifier {
   int pdfSize(String kind) => pdfSizes[kind] ?? 100;
 
   /// Remembers the size slider for reports of this [kind]: [percent] is
-  /// rounded to the slider's 5% steps and kept between 50% and 150%.
+  /// rounded to the slider's 5% steps and kept between 50% and 200%.
   Future<void> setPdfSize(String kind, int percent) async {
     final value =
         ((percent.clamp(pdfSizeMin, pdfSizeMax) / pdfSizeStep).round() *

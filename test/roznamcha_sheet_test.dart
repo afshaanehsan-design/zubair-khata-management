@@ -126,25 +126,28 @@ void main() {
     final sheet = snapshotReport(app, snapshot).sheets.single;
 
     expect(sheet.title, 'Roznamcha History — Roznamcha History (Date wise)');
+    // The stamp names the printed day (not the top bar's 26th) and when this
+    // copy was saved. No bold line repeats them with the closing (asked for
+    // by the user on 21 November 2026): the summary prints the closing.
     expect(
       sheet.stamp,
       matches(
-        RegExp(r'^Date: 26-10-2026 \| Print: \d\d/\d\d/\d{4}, \d\d:\d\d:\d\d$'),
+        RegExp(
+          r'^Date: 25-10-2026 \| Saved: 26/10/2026, 10:20:21 \| '
+          r'Print: \d\d/\d\d/\d{4}, \d\d:\d\d:\d\d$',
+        ),
       ),
     );
-    expect(
-      sheet.heading,
-      '25-10-2026 Saved: 26/10/2026, 10:20:21 Safi Baqaya: Rs. 2,910,390',
-    );
+    expect(sheet.heading, isEmpty);
 
     expect(heads(sheet.summary), [
       'OPENING',
       'A: KUL AAMAD',
       'B: KHARCHA + BANK JAMA',
-      'SAFI BAQAYA',
+      'CLOSING',
       // Added after the history print's four, as on the Roznamcha page.
       'TOTAL GAS DISPATCH (KG)',
-      'CALCULATED BILL',
+      'TOTAL SALE',
     ]);
     expect(cells(sheet.summary.body), [
       [
@@ -234,7 +237,7 @@ void main() {
     ]);
     expect(b.foot.single.first.span, 5);
 
-    // Safi Baqaya is the ledger's cash in hand that day.
+    // Closing is the ledger's cash in hand that day.
     expect(app.bookAt(day).money('cash'), rs(2910390));
     app.dispose();
     await db.close();
@@ -348,7 +351,8 @@ void main() {
 
     app.setDate(date);
     final sheet = buildReport(app, 'Daily roznamcha', date, date).sheets.single;
-    expect(sheet.heading, '01-11-2026 Safi Baqaya: Rs. 92,000');
+    expect(sheet.stamp, startsWith('Date: 01-11-2026 | Print: '));
+    expect(sheet.heading, isEmpty);
     expect(cells(sheet.summary.body), [
       [
         'Rs. 100,000 Bank Nikali 2,000',
@@ -479,7 +483,7 @@ void main() {
     }
     expect(urdu.title, matches(script));
     expect(urdu.stamp, matches(script));
-    expect(urdu.heading, matches(script));
+    expect(urdu.heading, isEmpty);
     // The Urdu sheet reads right to left, and so does its arrow.
     expect(urdu.tables[2].body[4][4].text, endsWith('Umer ← Zubair'));
     // The gas box mixes Latin sizes with Urdu "Bulk": every part is isolated,
@@ -501,7 +505,7 @@ void main() {
   });
 
   test(
-    'Gas dispatch and Calculated Bill print what the Roznamcha page shows',
+    'Gas dispatch and Total Sale print what the Roznamcha page shows',
     () async {
       final (app, db) = await start();
       const date = '2026-11-02';
@@ -536,7 +540,7 @@ void main() {
         'rate': rs(5770),
       });
       // A purchase share: its KG are dispatched, its charge is not in the
-      // Calculated Bill (the screen's card leaves it out too).
+      // Total Sale (the screen's card leaves it out too).
       await post({
         'type': 'sale',
         'party': sadiq,
@@ -570,14 +574,20 @@ void main() {
       final (app, db) = await start();
       await referenceDay(app);
       app.setDate(day);
-      String heading() =>
-          buildReport(app, 'Daily roznamcha', day, day).sheets.single.heading;
-      expect(heading(), '25-10-2026 Safi Baqaya: Rs. 2,910,390');
+      // The stamp says it, between the day and the moment of printing.
+      RozSheet sheet() =>
+          buildReport(app, 'Daily roznamcha', day, day).sheets.single;
+      String closing() => sheet().summary.body.single[3].text;
+      expect(sheet().stamp, startsWith('Date: 25-10-2026 | Print: '));
+      expect(sheet().heading, isEmpty);
+      expect(closing(), startsWith('Rs. 2,910,390 '));
       await app.saveSnapshot();
       final saved = '${app.ofKind('snapshot').single.data['savedAt']}';
       expect(
-        heading(),
-        '25-10-2026 Saved: ${rozSavedTime(saved)} Safi Baqaya: Rs. 2,910,390',
+        sheet().stamp,
+        startsWith(
+          'Date: 25-10-2026 | Saved: ${rozSavedTime(saved)} | Print: ',
+        ),
       );
       expect(
         rozSavedTime(saved),
@@ -593,7 +603,8 @@ void main() {
         'note': 'Chai',
         'form': 'kharcha',
       });
-      expect(heading(), '25-10-2026 Safi Baqaya: Rs. 2,910,290');
+      expect(sheet().stamp, startsWith('Date: 25-10-2026 | Print: '));
+      expect(closing(), startsWith('Rs. 2,910,290 '));
       app.dispose();
       await db.close();
     },
@@ -610,8 +621,12 @@ void main() {
         '2026-10-20',
         '2026-10-27',
       );
-      // Newest day first.
+      // Newest day first, each stamp naming its own day.
       expect(range.sheets.map((s) => s.date), [day, '2026-10-24']);
+      expect(range.sheets.map((s) => s.stamp.split(' | ').first), [
+        'Date: 25-10-2026',
+        'Date: 24-10-2026',
+      ]);
       // The day before holds only the starting cash.
       final before = range.sheets.last;
       expect(cells(before.table('Bank Nikali / Less / Opening')!.body), [
@@ -638,7 +653,8 @@ void main() {
       );
       expect(empty.rows, isEmpty);
       final sheet = empty.sheets.single;
-      expect(sheet.heading, '27-10-2026 Safi Baqaya: Rs. 2,910,390');
+      expect(sheet.stamp, startsWith('Date: 27-10-2026 | Print: '));
+      expect(sheet.summary.body.single[3].text, startsWith('Rs. 2,910,390 '));
       final a = sheet.tables.first, b = sheet.tables.last;
       expect(cells(a.body), [
         ['— Koi Aamad nahi —'],

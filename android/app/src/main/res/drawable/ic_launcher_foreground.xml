@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Zubair Khata book (same drawing as khata_icon.xml and tool/logo.ps1),
+     shrunk into the adaptive icon's safe zone so no launcher mask clips it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="56"
+        android:scaleX="0.72" android:scaleY="0.72" android:translateY="-2">
+        <path android:fillColor="#D8E9B8" android:pathData="M25,28h25l4,5 4,-5h25v52h-25l-4,4 -4,-4h-25z"/>
+        <path android:strokeColor="#183E37" android:strokeWidth="3" android:pathData="M54,36v39 M33,42h13 M33,51h13 M33,60h13 M63,42h12 M63,51h12 M63,60h12"/>
+    </group>
+</vector>

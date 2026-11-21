@@ -207,9 +207,9 @@ Report _dailyReport(
         'Opening',
         'A: Kul Aamad',
         'B: Kharcha + Bank Jama',
-        'Safi Baqaya',
+        'Closing',
         'Total Gas Dispatch (KG)',
-        'Calculated Bill',
+        'Total Sale',
         'Purchase share amount',
       ];
       additive.addAll({5: 1000, 6: 100, 7: 100});
